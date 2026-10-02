@@ -137,14 +137,16 @@ Training: 12,000 notes, 3 epochs, batch 16, learning rate 5e-5 (heads 1e-3), abo
 
 ### Similar-visit search
 
-A hit counts as relevant when it shares an active issue type with the query note (243 queries from the unseen set, 400 past visits).
+A hit counts as relevant when it shares an active issue type with the query note. The bank holds 400 past (synthetic) visits.
 
-| Retrieval | Precision@5 | Same risk level@5 |
-|---|---|---|
-| TF-IDF (keywords) | 0.795 | 0.491 |
-| Sentence embeddings (all-MiniLM-L6-v2) + FAISS | 0.799 | 0.473 |
+| Queries | Retrieval | Precision@5 | Same risk level@5 |
+|---|---|---|---|
+| 243 unseen-phrasing notes | TF-IDF (keywords) | 0.795 | 0.491 |
+| | Sentence embeddings (all-MiniLM-L6-v2) + FAISS | 0.799 | 0.473 |
+| 19 hand-written notes | TF-IDF (keywords) | **0.821** | **0.516** |
+| | Sentence embeddings (all-MiniLM-L6-v2) + FAISS | 0.758 | 0.368 |
 
-A tie. The past visits and the queries come from the same generator and share most of their vocabulary, which is the easy case for keyword search; embeddings are expected to pull ahead when the wording differs ("fridge alarm" vs "temperature excursion"). `python -m scope.search --eval --queries handwritten` runs the same comparison with the hand-written notes as queries.
+I expected general-purpose embeddings to pull ahead when the wording changes. They did not: on hand-written queries, keyword search was better (with only 19 queries, the gap is about six hits). The likely reasons are that domain terms such as "ICF", "SAE" and "SDV" carry most of the signal and TF-IDF weights them directly, while an off-the-shelf sentence model also encodes writing style and treats "no SAEs reported" as close to "SAE reported late". What makes search useful in practice is the structured filter: the app can restrict results to past visits that share an issue the model detected, which is a precise signal rather than a fuzzy one. Next steps would be a domain-tuned embedding model or hybrid keyword + vector ranking, judged on real queries.
 
 ## Comparison with Amazon Comprehend Medical
 
