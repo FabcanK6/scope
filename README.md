@@ -76,6 +76,7 @@ note ─► word tokens ─► BERT encoder ──┬─► [CLS] ─► risk he
 - **Deterministic post-processing.** The model decides *what* the note says; plain code turns that into dates, numbers and action items, so every field in the record can be traced back to highlighted words in the note.
 - **Similar-visit search.** Notes are embedded with `sentence-transformers/all-MiniLM-L6-v2` and indexed with FAISS (inner product on normalized vectors = cosine similarity). A TF-IDF index with the same interface is the keyword baseline.
 - **Rule baseline.** Regular expressions, a keyword list per issue type, NegEx-style negation cues and a points table for risk. It needs no model, so it is both the yardstick and the fallback.
+- **Hybrid parser (default).** Risk and issue flags from the fine-tuned model; visit metadata and action items from the rules, with the model filling in action items the rules miss. This split comes straight from the evaluation below.
 
 ### Issue types
 
@@ -103,17 +104,47 @@ The hand-written set is small but it is the most honest test: it was not produce
 
 ## Results
 
-Rule baseline (regex + keywords + negation cues):
+Four parsers on three test sets. The **hybrid** (BERT for risk and issues, rules for format-bound fields) is what the app uses.
 
-| Test set | Risk accuracy | High-risk recall | Issue F1 | Span F1 | Action-item F1 | False alarms on negated mentions |
+**Hand-written notes** (24 notes, never produced by the generator: the hardest and most realistic test)
+
+| Parser | Risk accuracy | High-risk visits caught | Issue F1 | Metadata F1 | Action-item F1 | Risk calibration error |
 |---|---|---|---|---|---|---|
-| test | 0.890 | 0.893 | 0.952 | 0.984 | 0.987 | 3.2% |
-| test_unseen | 0.857 | 0.785 | 0.976 | 0.959 | 0.923 | 2.4% |
-| handwritten | 0.500 | 0.125 | 0.720 | 0.894 | 0.758 | n/a |
+| Rules | 0.500 | 1 of 8 | 0.720 | 0.957 | 0.758 | n/a |
+| BERT (bert-base-uncased) | 0.708 | 7 of 8 | 0.800 | 0.794 | 0.500 | 0.300 |
+| Bio_ClinicalBERT | 0.708 | 7 of 8 | 0.825 | 0.776 | 0.442 | 0.319 |
+| **Hybrid** | **0.708** | **7 of 8** | **0.800** | **0.957** | **0.753** | 0.300 |
 
-The rules were written against the same vocabulary the generator uses, so they look strong on generated text and fall apart on the hand-written notes, where they catch 1 of 8 high-risk visits. Fine-tuned model results are produced by the [Colab notebook](notebooks/train_on_colab.ipynb) (`python -m scope.evaluate --model models/scope-bert`).
+**Unseen phrasings** (1,500 generated notes with held-out sentence variants, date formats and an e-mail style)
 
-An action item only counts as correct when the action text, owner and due date all match.
+| Parser | Risk accuracy | High-risk recall | Issue F1 | Metadata F1 | Action-item F1 | False alarms on negated mentions |
+|---|---|---|---|---|---|---|
+| Rules | 0.857 | 0.785 | 0.976 | 0.938 | 0.923 | 2.4% |
+| BERT | 0.855 | 0.829 | 0.946 | 0.632 | 0.753 | 7.2% |
+| Bio_ClinicalBERT | 0.836 | 0.787 | 0.923 | 0.680 | 0.622 | 0.2% |
+| **Hybrid** | **0.855** | **0.829** | **0.946** | **0.938** | **0.913** | 7.2% |
+
+**Seen phrasings** (1,500 new generated notes): BERT 0.995 risk accuracy and 1.000 on issues, spans and action items; rules 0.890 / 0.952 / 0.984 / 0.987. Near-perfect scores here mostly show that the model learned the generator, which is why the two harder sets matter.
+
+What the numbers say:
+
+- **The model is better at judgement, the rules at format.** On hand-written notes BERT catches 7 of 8 high-risk visits against 1 of 8 for the rules, because it reads severity and context rather than matching keywords. But on date formats and layouts it never saw, its metadata F1 drops to 0.63 while a date regex does not care. The hybrid keeps the best of both: model-level risk and issue detection with rule-level metadata (0.957 on hand-written notes).
+- **Clinical pre-training did not help.** Bio_ClinicalBERT (pre-trained on hospital notes) was no better than plain `bert-base-uncased` and slightly worse on unseen phrasings. Site-visit notes are operational language (queries, SDV, delegation logs), not patient narrative.
+- **Confidence does not travel.** Temperature scaling (T = 1.35) brings calibration error on in-distribution notes to 0.003, but on hand-written notes it is 0.30: the model reports near-100% confidence on some wrong answers. Calibration fitted on synthetic validation data does not carry over to a new writing style, so confidence is shown in the app but should not be trusted as a probability on real notes without recalibrating on real data.
+- **Typical remaining errors:** "zero open queries" read as an open-queries issue; severity under-called on a short note that describes a critical consent finding in casual words; a missing essential document mentioned in passing ("the updated 1572 is not in the binder") not flagged.
+
+Training: 12,000 notes, 3 epochs, batch 16, learning rate 5e-5 (heads 1e-3), about 9 minutes per model on a free Colab T4. An action item only counts as correct when the action text, owner and due date all match.
+
+### Similar-visit search
+
+A hit counts as relevant when it shares an active issue type with the query note (243 queries from the unseen set, 400 past visits).
+
+| Retrieval | Precision@5 | Same risk level@5 |
+|---|---|---|
+| TF-IDF (keywords) | 0.795 | 0.491 |
+| Sentence embeddings (all-MiniLM-L6-v2) + FAISS | 0.799 | 0.473 |
+
+A tie. The past visits and the queries come from the same generator and share most of their vocabulary, which is the easy case for keyword search; embeddings are expected to pull ahead when the wording differs ("fridge alarm" vs "temperature excursion"). `python -m scope.search --eval --queries handwritten` runs the same comparison with the hand-written notes as queries.
 
 ## Comparison with Amazon Comprehend Medical
 
@@ -137,7 +168,7 @@ python -m scope.cli --backend rules "IMV Site 104 12-Mar-2026. 23 queries open >
 
 # fine-tune (a GPU helps; the Colab notebook takes about 10-15 minutes on a free T4)
 python -m scope.train --model bert-base-uncased --out models/scope-bert --fp16
-python -m scope.evaluate --model models/scope-bert
+python -m scope.evaluate --model models/scope-bert --backend hybrid   # or --backend bert
 
 python -m scope.search --eval                            # embeddings vs TF-IDF retrieval
 streamlit run app/streamlit_app.py                       # downloads FabcanK6/scope-bert on first run
@@ -172,6 +203,7 @@ tests/                 unit tests (including a tiny randomly initialised BERT)
 
 - Trained on synthetic notes. Real notes are messier and use site- and sponsor-specific vocabulary; the hand-written set shows the drop to expect, and real use needs a labelled sample of real (de-identified) notes for evaluation and fine-tuning.
 - Risk is defined by a fixed points rubric. Organizations weight findings differently, so the rubric (and labels) should be adapted before use.
+- Confidence scores are calibrated on synthetic data only; on differently written notes the model can be confidently wrong (see Results).
 - Notes longer than the model's 512-token window are cut off; the record shows a warning when that happens.
 - SCOPE supports human review; it does not replace it. Every field links back to the words it came from so a reviewer can check it quickly.
 

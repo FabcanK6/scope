@@ -106,7 +106,7 @@ def evaluate_retrieval(index: NoteIndex, queries: list[dict], k: int = 5) -> dic
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--corpus", default="data/corpus.jsonl")
-    ap.add_argument("--queries", default="data/test_unseen.jsonl")
+    ap.add_argument("--queries", default="data/test_unseen.jsonl", help="JSONL file or 'handwritten'")
     ap.add_argument("--n-queries", type=int, default=300)
     ap.add_argument("--k", type=int, default=5)
     ap.add_argument("--eval", action="store_true", help="compare embeddings vs TF-IDF retrieval")
@@ -115,7 +115,12 @@ def main(argv: list[str] | None = None) -> None:
 
     corpus = read_jsonl(args.corpus)
     if args.eval:
-        queries = read_jsonl(args.queries)[: args.n_queries]
+        if args.queries == "handwritten":
+            from scope.data.handwritten import load_handwritten
+
+            queries = load_handwritten()
+        else:
+            queries = read_jsonl(args.queries)[: args.n_queries]
         for backend in ("tfidf", "embeddings"):
             try:
                 index = NoteIndex(corpus, backend=backend)
