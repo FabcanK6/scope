@@ -1,0 +1,89 @@
+# Realistic evaluation notes for SCOPE.
+#
+# Seven monitoring visit notes in the style of real CRA reports, provided by an
+# experienced clinical research professional (real-06 and real-07 come from a
+# larger sample corpus that turned out to be 7 notes with swapped details).
+# People's names are replaced with invented ones. They are long, formal and mostly "clean": most topics are
+# mentioned only to confirm there is no problem, and findings are often
+# corrected during the visit. Same format and risk rubric as handwritten.txt.
+# Action items are only labelled where the note states an open one; this set mainly
+# measures risk, issues and metadata.
+
+=== real-01
+risk: low
+issues:
+---
+Monitor: [[Hannah Price|MONITOR]], RN, CCRA
+Visit Type: [[Interim Monitoring Visit|VISIT_TYPE]] (IMV)
+Date: [[October 14, 2025|VISIT_DATE]]
+Notes:
+Conducted a 100% source data verification (SDV) for Subject 004-12 and 004-15. Subject 004-12's informed consent form (ICF) was properly signed and dated prior to any protocol-specified procedures. However, a review of the concomitant medications log for Subject 004-15 revealed that the patient was prescribed Metoprolol by their primary care physician on September 3, 2025. This medication was not updated in the Electronic Case Report Form (eCRF). The Study Coordinator (SC) was retrained on the importance of real-time concomitant medication updates. The SC corrected the log during the visit, and I verified the entry against the source medical records. Investigational Product (IP) accountability was performed; the current inventory matches the interactive response technology (IRT) system logs exactly. No temperature excursions were noted on the digital data logger for the ambient storage closet.
+
+=== real-02
+risk: low
+issues:
+---
+Monitor: [[Victor Mendes|MONITOR]]
+Visit Type: [[Close-Out Visit|VISIT_TYPE]] (COV)
+Date: [[January 22, 2026|VISIT_DATE]]
+Notes:
+* Subject Status: All [[24|ENROLLED]] randomized subjects have completed the study. All eCRF pages are fully entered, monitored, and query-free. Investigator sign-offs are 100% complete.
+* IP Accountability: Conducted final investigational product accountability. Total shipped to site: 150 kits. Total dispensed: 122 kits. Total remaining/unused: 28 kits. All remaining unused kits and empty used bottles were packed and verified against the destruction manifest. They are ready for return shipment to the central depot.
+* Regulatory Binder: The Investigator Site File (ISF) was reviewed and is completely up to date. All safety reports, IRB approvals, and correspondence are chronologically filed.
+* Action Item: The Principal Investigator (PI) signed the final financial disclosure forms. The site was reminded of the 25-year federal record retention requirement.
+
+=== real-03
+risk: low
+issues: PROTOCOL_DEVIATION
+---
+Monitor: [[Irina Volkova|MONITOR]], PhD
+Visit Type: [[Interim Monitoring Visit|VISIT_TYPE]] (IMV)
+Date: [[April 09, 2026|VISIT_DATE]]
+Notes:
+Arrived at the site at 09:00 AM. Met with the new back-up Study Coordinator, Maya Collins, to review her delegation of authority log entry and training records. Her CV, medical license, and GCP certificates were verified and added to the ISF. During SDV for Subject 011-03, I identified a Protocol Deviation (PD): the Week 4 laboratory blood draw was missed because the subject forgot to fast, and the site rescheduled the draw outside of the allowable +/- 3-day protocol window. The PI was notified, and a deviation log was generated in the eCRF.
+I also checked the laboratory kit inventory. The site is currently running low on central lab ambient shipping boxes (only 2 remaining). I assisted the SC in placing an expedited reorder through the laboratory portal to avoid missing the upcoming Week 8 visits for the active cohort.
+
+=== real-04
+risk: low
+issues: REG_DOCS
+---
+Monitor: [[Daniel Park|MONITOR]]
+Visit Type: [[Site Initiation Visit|VISIT_TYPE]] (SIV)
+Date: [[July 11, 2026|VISIT_DATE]]
+Notes:
+* Training Conducted: Provided comprehensive protocol training to the PI, Sub-I, and three clinic nurses. Training focused heavily on the strict inclusion/exclusion criteria, specifically the mandatory baseline HbA1c threshold (>7.5% and <10.0%).
+* Facility Tour: Toured the laboratory, IP storage area, and infusion suite. The emergency crash cart was verified to be fully stocked with valid expiration dates on all emergency medications.
+* IP Management: The site's pharmacist was trained on the preparation of the active infusion. The pharmacy's -20 C freezer has a continuous monitoring system with an external alarm, which meets protocol requirements.
+* Pending Items: The site cannot screen patients until the pending local IRB approval letter for Advertisement Flyer v2.0 is received and uploaded to the portal. The PI expects this letter by next Friday.
+
+=== real-05
+risk: high
+issues: SAE_REPORTING
+---
+Monitor: [[Rachel Moore|MONITOR]], CCRC
+Visit Type: [[Directed/For-Cause Monitoring Visit|VISIT_TYPE]]
+Date: [[September 18, 2026|VISIT_DATE]]
+Notes:
+This unscheduled visit was triggered due to a delay in the site reporting a Serious Adverse Event (SAE) for Subject 002-44.
+The subject was hospitalized for acute cholecystitis on August 30, 2026, but the site did not notify the Sponsor until September 12, 2026, violating the mandatory 24-hour protocol reporting window. I met face-to-face with the PI to conduct a root-cause analysis. The PI explained that the subject failed to notify the site coordinator immediately, and the hospital discharge summary was delayed.
+I retrained both the PI and the primary SC on SAE definition and reporting timelines. The site has implemented a Corrective and Preventive Action (CAPA) plan, which includes adding a "Call the Study Team Immediately if Hospitalized" sticker to all subject diary cards. I verified that the eCRF SAE form matches the hospital discharge summary regarding dates, severity, and the PI's causality assessment (determined to be "Not Related" to the study drug).
+
+=== real-06
+risk: low
+issues: PROTOCOL_DEVIATION
+---
+Monitor: [[Lena Fischer|MONITOR]], CRA
+Visit Type: [[Interim Monitoring Visit|VISIT_TYPE]] (IMV)
+Date: [[January 28, 2024|VISIT_DATE]]
+Notes:
+Conducted routine IMV focusing on ICF compliance and IP reconciliation. During SDV for Subject 018-35, it was identified that ICF Version 2.0 was signed two days after the Protocol Amendment implementation date. A Protocol Deviation was documented, and the subject was re-consented on the correct protocol version (v3.0) during today's visit. IP accountability was complete: 17 kits received, 12 dispensed, and inventory perfectly aligns with IRT records. Action item: [[PI|OWNER]] to [[sign off on open eCRF queries|ACTION]] prior to [[next scheduled monitor call|DUE]].
+
+=== real-07
+risk: low
+issues:
+---
+Monitor: [[Priya Raman|MONITOR]], CCRC
+Visit Type: [[Interim Monitoring Visit|VISIT_TYPE]] (IMV)
+Date: [[May 22, 2024|VISIT_DATE]]
+Notes:
+Performed 100% Source Data Verification (SDV) for active subjects 008-81, 008-78, and 008-84. All ICFs were verified to be executed correctly prior to screening. Primary endpoints, adverse event logs, and lab panels were cross-referenced with source EHR records with 0 open discrepancies. IP storage logs were audited; daily continuous temperature monitoring logs remain fully within protocol thresholds (+2 C to +8 C). The Investigator Site File (ISF) was verified and all safety letters and IRB acknowledgments are filed chronologically.

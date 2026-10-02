@@ -3,7 +3,7 @@ import unittest
 
 from scope.data import templates as T
 from scope.data.generate import generate, sample_note
-from scope.data.handwritten import load_handwritten
+from scope.data.handwritten import load_handwritten, load_realistic
 from scope.record import assemble_actions
 from scope.schema import BIO_LABELS, ISSUE_CODES, RISK_LEVELS
 from scope.text import bio_to_spans, tokenize
@@ -33,6 +33,13 @@ class TestGenerator(unittest.TestCase):
         rng = random.Random(0)
         self.assertEqual(sample_note(rng, unseen=True, style="email")["style"], "email")
 
+    def test_formal_style(self):
+        rows = [sample_note(random.Random(i), style="formal") for i in range(30)]
+        self.assertTrue(all(r["style"] == "formal" for r in rows))
+        self.assertTrue(any("Visit Type:" in r["text"] for r in rows))
+        # formal notes are mostly clean: several topics are mentioned without being active issues
+        self.assertGreater(sum(len(r["inactive"]) for r in rows), sum(len(r["issues"]) for r in rows))
+
     def test_split_variants(self):
         _seen, held = T.split_variants(list(range(8)))
         self.assertEqual(held, [3, 7])
@@ -40,6 +47,12 @@ class TestGenerator(unittest.TestCase):
 
 
 class TestHandwritten(unittest.TestCase):
+    def test_realistic(self):
+        rows = load_realistic()
+        self.assertEqual(len(rows), 7)
+        self.assertTrue(all(r["style"] == "realistic" for r in rows))
+
+
     def test_load(self):
         rows = load_handwritten()
         self.assertGreaterEqual(len(rows), 20)

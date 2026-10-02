@@ -125,6 +125,15 @@ def evaluate_predictions(rows: list[dict], preds: list[dict], by_style: bool = T
 
     result = {"n": n, "risk": risk, "issues": issues, "spans": spans, "actions": actions,
               "note_exact_match": exact / n if n else 0.0}
+    if any("review_reasons" in p for p in preds):
+        flagged = [bool(p.get("review_reasons")) for p in preds]
+        ok = [c for c, f in zip(risk_correct, flagged) if not f]
+        bad = [c for c, f in zip(risk_correct, flagged) if f]
+        result["review"] = {"flag_rate": sum(flagged) / n if n else 0.0,
+                            "risk_acc_unflagged": sum(ok) / len(ok) if ok else None,
+                            "risk_acc_flagged": sum(bad) / len(bad) if bad else None,
+                            "wrong_risk_caught": (sum(1 for c, f in zip(risk_correct, flagged) if f and not c)
+                                                  / max(1, sum(1 for c in risk_correct if not c)))}
     if by_style:
         styles = sorted({r.get("style", "?") for r in rows})
         if len(styles) > 1:
@@ -151,6 +160,9 @@ def headline(r: dict) -> dict:
         out["false_alarm_on_negated"] = r["issues"]["false_alarm_on_negated"]
     if "ece" in r["risk"]:
         out["risk_ece"] = r["risk"]["ece"]
+    if "review" in r:
+        out["review_flag_rate"] = r["review"]["flag_rate"]
+        out["wrong_risk_flagged"] = r["review"]["wrong_risk_caught"]
     return out
 
 
@@ -187,6 +199,10 @@ def format_report(r: dict) -> str:
     for g in RISK_LEVELS:
         row = r["risk"]["confusion"].get(g, {})
         lines.append(f"  {g:<7} " + "  ".join(f"{p}={row.get(p, 0):<4}" for p in RISK_LEVELS))
+    if "review" in r:
+        rv = r["review"]
+        acc = ", ".join(f"{k}={v:.3f}" for k, v in rv.items() if v is not None)
+        lines.append(f"\nneeds-review flag: {acc}")
     if "by_style" in r:
         lines.append("\nby note style:")
         for st, m in r["by_style"].items():

@@ -60,14 +60,16 @@ VISIT_TYPES = {
     "FOR_CAUSE": "For-cause visit",
 }
 
-# Severity points used to derive the risk label in the synthetic data
-# (and by the rule baseline): low < 2 <= medium < 6 <= high.
+# Severity rubric (v2): each active finding scores minor = 1, major = 3, critical = 6.
+#   6+ points = high   -> any critical finding, or two major findings
+#   3-5 points = medium -> one major finding, or three or more minor findings
+#   0-2 points = low
 SEVERITY_POINTS = {"minor": 1, "major": 3, "critical": 6}
 
 
 def risk_from_points(points: int) -> str:
     if points >= 6:
         return "high"
-    if points >= 2:
+    if points >= 3:
         return "medium"
     return "low"

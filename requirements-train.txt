@@ -1,0 +1,8 @@
+# Only needed for the v1 fine-tuned BERT baseline (training, evaluation, similar-visit embeddings)
+--extra-index-url https://download.pytorch.org/whl/cpu
+-r requirements.txt
+torch>=2.3
+transformers>=4.40
+huggingface_hub>=0.30
+sentence-transformers>=3.0
+faiss-cpu>=1.8

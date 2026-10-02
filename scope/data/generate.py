@@ -103,7 +103,8 @@ def _sentence_values(rng: random.Random, ctx: dict) -> dict:
         "subj": rng.choice([f"subject {ctx['site_id']}-{rng.randint(1, 40):03d}",
                             f"{ctx['site_id']}-{rng.randint(1, 40):03d}", f"Subj {rng.randint(1, 40):03d}"]),
         "ver": rng.randint(2, 6), "crit": rng.randint(1, 12), "visit_no": rng.randint(2, 12),
-        "kit": rng.randint(10000, 99999), "temp": rng.randint(9, 14),
+        "kit": rng.randint(10000, 99999), "temp": rng.randint(9, 14), "hour": rng.randint(7, 10),
+        "subj2": f"{ctx['site_id']}-{rng.randint(1, 40):03d}",
         "enr_lag": ctx["ne"], "target": ctx["ne"] + rng.randint(5, 25),
         "other_date": format_date(ctx["visit_date"] - timedelta(days=rng.randint(20, 120)), ctx["date_fmt"]),
         "future_date": format_date(ctx["visit_date"] + timedelta(days=rng.randint(28, 90)), ctx["date_fmt"]),
@@ -115,13 +116,15 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
     vt = rng.choices(list(T.VISIT_TYPE_WEIGHTS), weights=list(T.VISIT_TYPE_WEIGHTS.values()))[0]
     if style is None:
         if unseen:
-            style = rng.choices(["field", "report", "narrative", "email"], weights=[0.2, 0.2, 0.2, 0.4])[0]
+            style = rng.choices(["field", "report", "narrative", "formal", "email"],
+                                weights=[0.15, 0.15, 0.1, 0.2, 0.4])[0]
         else:
-            style = rng.choices(["field", "report", "narrative"], weights=[0.4, 0.35, 0.25])[0]
+            style = rng.choices(["field", "report", "narrative", "formal"], weights=[0.3, 0.25, 0.15, 0.3])[0]
+    formal = style == "formal"
 
     site_id = rng.choice([rng.randint(100, 999), rng.randint(1001, 3999)])
     visit_date = date(2025, 1, 1) + timedelta(days=rng.randint(0, 630))
-    date_fmt = S.pick(T.DATE_FORMATS)
+    date_fmt = S.pick(T.FORMAL_DATE_FORMATS if formal else T.DATE_FORMATS)
     cra_first, cra_last = rng.choice(T.FIRST_NAMES), rng.choice(T.LAST_NAMES)
     pi_first, pi_last = rng.choice(T.FIRST_NAMES), rng.choice([n for n in T.LAST_NAMES if n != cra_last])
     ns = 0 if vt == "SIV" else rng.randint(1, 60)
@@ -143,39 +146,52 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
     candidates = list(T.VISIT_TYPE_ISSUES.get(vt, ISSUE_CODES))
     if vt == "COV":
         candidates.remove("ENROLLMENT_LAG")
-    k = rng.choices([0, 1, 2, 3, 4, 5], weights=[0.2, 0.3, 0.25, 0.13, 0.08, 0.04])[0]
+    if formal:  # real reports: mostly clean, many topics confirmed as fine
+        k = rng.choices([0, 1, 2, 3, 4], weights=[0.3, 0.35, 0.2, 0.1, 0.05])[0]
+    else:
+        k = rng.choices([0, 1, 2, 3, 4, 5], weights=[0.2, 0.3, 0.25, 0.13, 0.08, 0.04])[0]
     active = rng.sample(candidates, min(k, len(candidates)))
-    severities = {c: rng.choices(["minor", "major", "critical"], weights=[0.45, 0.4, 0.15])[0] for c in active}
+    bank = T.FORMAL_ISSUE_SENTENCES if formal else T.ISSUE_SENTENCES
+    sev_weights = {"minor": 0.45, "major": 0.4, "critical": 0.15}
+    severities = {}
+    for c in active:
+        levels = [lv for lv in sev_weights if bank[c].get(lv)]
+        severities[c] = rng.choices(levels, weights=[sev_weights[lv] for lv in levels])[0]
     rest = [c for c in candidates if c not in active]
-    inactive_codes = rng.sample(rest, min(len(rest), rng.choices([0, 1, 2, 3], weights=[0.3, 0.35, 0.25, 0.1])[0]))
+    n_inactive = rng.randint(2, 5) if formal else rng.choices([0, 1, 2, 3], weights=[0.3, 0.35, 0.25, 0.1])[0]
+    inactive_codes = rng.sample(rest, min(len(rest), n_inactive))
     inactive = {c: rng.choice(["negated", "negated", "resolved"]) for c in inactive_codes}
     risk = risk_from_points(sum(SEVERITY_POINTS[s] for s in severities.values()))
 
-    mentions = []  # (group, text, spans)
+    mentions = []  # (group, text, spans, code)
     for code, kind in list(severities.items()) + list(inactive.items()):
-        tmpl = S.pick(T.ISSUE_SENTENCES[code][kind])
+        tmpl = S.pick(bank[code][kind])
         txt, sp = render(tmpl, _sentence_values(rng, ctx))
-        mentions.append((ISSUE_BY_CODE[code].group, txt, sp))
+        mentions.append((ISSUE_BY_CODE[code].group, txt, sp, code))
     rng.shuffle(mentions)
 
     # --- actions -------------------------------------------------------------
     actions, action_lines = [], []
-    action_templates = T.ACTION_TEMPLATES
+    action_templates = T.FORMAL_ACTION_TEMPLATES if formal else T.ACTION_TEMPLATES
     if style in ("narrative", "email"):
         action_templates = [t for t in action_templates if not t.startswith(("- ", "AI:"))]
     planned = []
     for code, sev in severities.items():
-        n_act = 0 if rng.random() < 0.15 else (rng.choice([1, 2]) if sev != "minor" else 1)
+        n_act = 0 if rng.random() < (0.35 if formal else 0.15) else (rng.choice([1, 2]) if sev != "minor" else 1)
         for action in rng.sample(T.ISSUE_ACTIONS[code], n_act):
-            if code == "PI_OVERSIGHT":
+            if formal:
+                owner = ("The PI" if code == "PI_OVERSIGHT" else rng.choice(["The pharmacist", "The SC"])
+                         if code in ("IP_ACCOUNTABILITY", "TEMP_EXCURSION") else rng.choice(T.FORMAL_OWNERS))
+            elif code == "PI_OVERSIGHT":
                 owner = rng.choice([T.PI_OWNER, f"Dr. {pi_last}"])
             elif code in ("IP_ACCOUNTABILITY", "TEMP_EXCURSION"):
                 owner = rng.choice(T.PHARMACY_OWNERS + T.SITE_OWNERS[:2])
             else:
                 owner = rng.choice(T.SITE_OWNERS)
             planned.append((owner, action))
-    if rng.random() < (0.5 if severities else 0.3):
-        planned.append((rng.choice(T.CRA_OWNERS + [f"CRA {cra_last}"]), rng.choice(T.GENERIC_ACTIONS)))
+    if rng.random() < ((0.25 if formal else 0.5) if severities else (0.15 if formal else 0.3)):
+        cra_owner = "The CRA" if formal else rng.choice(T.CRA_OWNERS + [f"CRA {cra_last}"])
+        planned.append((cra_owner, rng.choice(T.GENERIC_ACTIONS)))
     for owner, action in planned:
         tmpl = S.pick(action_templates)
         due = None
@@ -183,7 +199,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
             if rng.random() < 0.7:
                 due = format_date(visit_date + timedelta(days=rng.randint(7, 45)), date_fmt)
             else:
-                due = rng.choice(T.RELATIVE_DUES)
+                due = rng.choice(T.FORMAL_RELATIVE_DUES if formal else T.RELATIVE_DUES)
         vals = {"owner": owner, "action": action, "action_cap": _cap(action), "due": due}
         txt, sp = render(tmpl, vals)
         txt = _cap(txt)
@@ -210,7 +226,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
             add_t(S.pick(T.FIELD_PEOPLE))
         if vt != "SIV" and rng.random() < 0.85:
             add_t(S.pick(T.FIELD_ENROLLMENT))
-        for _g, txt, sp in mentions:
+        for _g, txt, sp, _c in mentions:
             bullet = "- " if rng.random() < 0.7 else ""
             nb.add(bullet + txt, [(lab, s + len(bullet), e + len(bullet)) for lab, s, e in sp])
         distractor("\n")
@@ -221,7 +237,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
         if vt != "SIV":
             add_t(S.pick(T.REPORT_ENROLLMENT), "\n\n")
         for group, headings in T.REPORT_SECTIONS.items():
-            sents = [(_cap(txt), sp) for g, txt, sp in mentions if g == group]
+            sents = [(_cap(txt), sp) for g, txt, sp, _c in mentions if g == group]
             if not sents and rng.random() < 0.6:
                 continue
             nb.add(rng.choice(headings), [], "\n\n")
@@ -244,7 +260,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
         add_t(S.pick([o for o in T.REPORT_OPENINGS if "\n" not in o]))
         if vt != "SIV":
             add_t(S.pick(T.REPORT_ENROLLMENT), " ")
-        for _g, txt, sp in mentions:
+        for _g, txt, sp, _c in mentions:
             txt = _cap(txt) if txt.endswith(".") else _cap(txt) + "."
             nb.add(txt, sp, " ")
         distractor(" ")
@@ -252,13 +268,15 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
         for txt, sp in action_lines:
             nb.add(txt if txt.endswith(".") else txt + ".", sp, sep)
             sep = " "
+    elif style == "formal":
+        _assemble_formal(rng, nb, values, vt, mentions, action_lines, ctx, S)
     else:  # email (held out)
         add_t(S.pick(T.EMAIL_OPENINGS))
         if vt != "SIV":
             add_t(S.pick(T.EMAIL_ENROLLMENT), " ")
         if mentions:
             nb.add(rng.choice(["A few things came up:", "Main points:", "Findings:"]), [], "\n\n")
-            for _g, txt, sp in mentions:
+            for _g, txt, sp, _c in mentions:
                 nb.add("* " + txt, [(lab, s + 2, e + 2) for lab, s, e in sp], "\n")
         if action_lines:
             nb.add("Next steps:", [], "\n\n")
@@ -273,6 +291,69 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
                  "monitor": values["cra"], "pi": values["pi"], "screened": None if vt == "SIV" else ns,
                  "enrolled": None if vt == "SIV" else ne},
     })
+
+
+def _assemble_formal(rng: random.Random, nb: NoteBuilder, values: dict, vt: str, mentions: list, action_lines: list,
+                     ctx: dict, S: Sampler) -> None:
+    """Long, formal CRA report: header block, then prose paragraphs or topic bullets."""
+    title = S.pick(T.FORMAL_VISIT_TITLES[vt])
+    label_part, _, suffix = title.partition(" (")
+    suffix = f" ({suffix}" if suffix else ""
+    site_val = rng.choice([f"Site {ctx['site_id']}", str(ctx["site_id"])])
+    vals = {**values, "vt_f": label_part, "site_f": site_val}
+    header = [
+        "Monitor: [[MONITOR:cra]]" + rng.choice(T.FORMAL_CREDENTIALS),
+        "Visit Type: [[VISIT_TYPE:vt_f]]" + suffix,
+        rng.choice(["Date", "Visit Date", "Date of Visit"]) + ": [[VISIT_DATE:date]]",
+    ]
+    if rng.random() < 0.5:
+        header.insert(rng.randint(0, 3), "Site: [[SITE:site_f]]")
+    if rng.random() < 0.4:
+        header.append("Principal Investigator: [[PI:pi]]")
+    if rng.random() < 0.3:
+        header[0], header[1] = header[1], header[0]
+    for line in header:
+        txt, sp = render(line, vals)
+        nb.add(txt, sp)
+    if rng.random() < 0.7:
+        nb.add("Notes:", [])
+
+    # body items: (topic, text, spans)
+    items = [(T.FORMAL_TOPICS[code], txt, sp) for _g, txt, sp, code in mentions]
+    seen_neutral, held_neutral = T.split_variants(T.FORMAL_NEUTRAL)
+    pool = held_neutral if (S.unseen and held_neutral) else seen_neutral
+    for tmpl in rng.sample(pool, min(len(pool), rng.randint(1, 3))):
+        items.append(("General", render(tmpl, _sentence_values(rng, ctx))[0], []))
+    if rng.random() < 0.25:
+        items.append(("Action Item", S.pick(T.FORMAL_COMPLETED), []))
+    if vt != "SIV" and rng.random() < 0.6:
+        txt, sp = render(S.pick(T.FORMAL_ENROLLMENT), vals)
+        if txt.startswith("Subject Status: "):
+            cut = len("Subject Status: ")
+            txt, sp = txt[cut:], [(lab, s - cut, e - cut) for lab, s, e in sp]
+        items.append(("Subject Status", txt, sp))
+    rng.shuffle(items)
+
+    if rng.random() < 0.5:  # topic bullets
+        for topic, txt, sp in items:
+            prefix = f"* {topic}: "
+            nb.add(prefix + txt, [(lab, s + len(prefix), e + len(prefix)) for lab, s, e in sp])
+        for txt, sp in action_lines:
+            nb.add("* " + txt, [(lab, s + 2, e + 2) for lab, s, e in sp])
+    else:  # prose paragraphs
+        n_par = min(len(items), rng.randint(1, 3))
+        cuts = sorted(rng.sample(range(1, len(items)), n_par - 1)) if n_par > 1 else []
+        start = 0
+        for cut in cuts + [len(items)]:
+            first = True
+            for _topic, txt, sp in items[start:cut]:
+                nb.add(txt, sp, "\n" if first else " ")
+                first = False
+            start = cut
+        first = True
+        for txt, sp in action_lines:
+            nb.add(txt if txt.endswith(".") else txt + ".", sp, "\n" if first else " ")
+            first = False
 
 
 def _finalize(nb: NoteBuilder, row: dict) -> dict | None:

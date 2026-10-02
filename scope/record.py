@@ -131,7 +131,7 @@ def build_record(text: str, pred: dict) -> dict:
     if visit["screened"] is not None and visit["enrolled"] is not None and visit["enrolled"] > visit["screened"]:
         warnings.append("Enrolled count is larger than screened count; check the numbers.")
 
-    actions = assemble_actions(text, spans)
+    actions = pred["action_items"] if "action_items" in pred else assemble_actions(text, spans)
     for a in actions:
         if not a["owner"]:
             warnings.append(f"Action '{a['action']}' has no owner.")
@@ -139,7 +139,8 @@ def build_record(text: str, pred: dict) -> dict:
             warnings.append(f"Action '{a['action']}' is due before the visit date.")
 
     issues = [{"code": c, "display": ISSUE_BY_CODE[c].display, "group": ISSUE_BY_CODE[c].group,
-               "confidence": round(float(pred.get("issue_probs", {}).get(c, 1.0)), 4)} for c in pred["issues"]]
+               "confidence": round(float(pred.get("issue_probs", {}).get(c, 1.0)), 4),
+               "severity": pred.get("severities", {}).get(c)} for c in pred["issues"]]
     risk_probs = pred.get("risk_probs") or {}
     if pred["risk"] == "high" and not actions:
         warnings.append("High-risk visit with no follow-up actions recorded.")
@@ -154,7 +155,12 @@ def build_record(text: str, pred: dict) -> dict:
         "actions": actions,
         "spans": [s.to_dict() for s in spans],
         "warnings": warnings,
+        "review": {"needed": bool(pred.get("review_reasons")), "reasons": pred.get("review_reasons") or []},
+        "findings": pred.get("findings", []),
+        "summary": pred.get("summary", ""),
+        "points": pred.get("points"),
         "backend": pred.get("backend"),
+        "model": pred.get("model"),
     }
 
 
@@ -173,12 +179,27 @@ def audit_summary(rec: dict) -> str:
                      f"{v['screened'] if v['screened'] is not None else '?'} screened")
     conf = rec["risk"]["confidence"]
     lines.append(f"**Risk: {rec['risk']['level'].upper()}**" + (f" ({conf:.0%} confidence)" if conf else ""))
+    if rec.get("review", {}).get("needed"):
+        lines.append("**Needs human review:** " + " ".join(rec["review"]["reasons"]))
     lines.append("")
+    if rec.get("summary"):
+        lines.append(rec["summary"])
+        lines.append("")
     if rec["issues"]:
         lines.append("Active issues:")
-        lines += [f"- {i['display']} ({i['group']})" for i in rec["issues"]]
+        evidence = {f["issue"]: f["evidence"] for f in rec.get("findings", [])
+                    if f.get("verified") and f["status"] == "active"}
+        for i in rec["issues"]:
+            sev = f" - {i['severity']}" if i.get("severity") else ""
+            quote = f': "{evidence[i["code"]]}"' if i["code"] in evidence else ""
+            lines.append(f"- {i['display']} ({i['group']}{sev}){quote}")
     else:
         lines.append("Active issues: none")
+    fixed = [f for f in rec.get("findings", []) if f.get("verified") and f["status"] == "resolved_on_site"]
+    if fixed:
+        lines.append("")
+        lines.append("Resolved during the visit:")
+        lines += [f"- {f['display']}: \"{f['evidence']}\"" for f in fixed]
     lines.append("")
     if rec["actions"]:
         lines.append("| # | Action | Owner | Due |")
@@ -204,4 +225,5 @@ def to_row(rec: dict) -> dict:
         "monitor": v["monitor"], "risk": rec["risk"]["level"], "risk_confidence": rec["risk"]["confidence"],
         "issues": "; ".join(i["code"] for i in rec["issues"]), "n_issues": len(rec["issues"]),
         "n_actions": len(rec["actions"]), "screened": v["screened"], "enrolled": v["enrolled"],
+        "needs_review": rec.get("review", {}).get("needed", False),
     }

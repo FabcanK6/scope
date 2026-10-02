@@ -4,8 +4,9 @@
 # wording, abbreviations, run-on sentences, typos). They are a small, hard test
 # of how the models generalise beyond the template data. All content is fictional.
 #
-# Risk follows the same rubric as the generator: each active issue scores 1 (minor),
-# 3 (major) or 6 (critical); 6+ points = high, 2-5 = medium, 0-1 = low.
+# Risk follows the same rubric as the generator (v2): each active issue scores 1 (minor),
+# 3 (major) or 6 (critical); 6+ points = high, 3-5 = medium, 0-2 = low. Late or unreported
+# SAEs are critical.
 #
 # Format: a block starts with "=== <id>", then "risk:" and "issues:" lines, then
 # "---", then the note. Spans are marked [[text|LABEL]].
@@ -116,7 +117,7 @@ issues:
 [[CRA|OWNER]] to [[send follow up letter|ACTION]] by [[13 Feb 2026|DUE]]
 
 === hw-13
-risk: medium
+risk: high
 issues: SAE_REPORTING
 ---
 [[Remote|VISIT_TYPE]] check-in with [[Site 3021|SITE]] on [[January 28, 2026|VISIT_DATE]]. One SAE (pneumonia, 3021-002) was sent to safety 4 days after the site found out, not within 24h. Site says the PI was on vacation. Otherwise data and queries are fine.

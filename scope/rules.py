@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from scope.data.templates import VISIT_TYPE_SURFACES
+from scope.data.templates import FORMAL_VISIT_TITLES, VISIT_TYPE_SURFACES
 from scope.schema import ISSUE_CODES, SEVERITY_POINTS, risk_from_points
 from scope.text import bio_to_spans, char_spans_to_bio, sentences, tokenize
 
@@ -22,6 +22,7 @@ DATE_RE = re.compile(
     re.I,
 )
 _SURFACES = sorted({s for forms in VISIT_TYPE_SURFACES.values() for s in forms}
+                   | {t.split(" (")[0] for forms in FORMAL_VISIT_TITLES.values() for t in forms}
                    | {"monitoring visit", "interim visit", "for-cause visit", "remote"}, key=len, reverse=True)
 VISIT_TYPE_RE = re.compile(r"\b(?:" + "|".join(re.escape(s) for s in _SURFACES) + r")\b", re.I)
 SITE_RE = re.compile(r"\bsite\s*#?\s*\d{2,4}\b", re.I)
@@ -33,6 +34,7 @@ MONITOR_RES = [
     re.compile(rf"(?:Thanks|Best|Cheers|Regards),?\s*\n?\s*(?P<name>{_NAME})\s*$"),
 ]
 PI_RES = [
+    re.compile(rf"\bPrincipal Investigator\s*:\s*(?P<name>{_NAME})"),
     re.compile(rf"\bPI\s*:?\s*(?P<name>{_NAME})(?!\s+(?:to|will|agreed|owns))"),
     re.compile(rf"[Tt]he PI, (?P<name>{_NAME}),"),
     re.compile(r"(?P<name>Dr\. [A-Z][a-z]+(?: [A-Z][a-z]+)?)"),
@@ -47,10 +49,12 @@ ENROLLED_RES = [re.compile(rf"\bRand\s+(?P<n>{_NUM})\b", re.I),
                 re.compile(rf"\brandomi[sz]ed (?P<n>{_NUM}) subjects\b", re.I)]
 
 _OWNER = (r"(?:[Tt]he CRC|CRC|New CRC|Site|site|Study coordinator|Regulatory coordinator|Reg coordinator|Coordinator|"
-          r"Sub-I(?: [A-Z][a-z]+)?|PI|Dr\. [A-Z][a-z]+|Pharmacist|Pharmacy|CRA(?: [A-Z][a-z]+)?)")
+          r"Sub-I(?: [A-Z][a-z]+)?|PI|Dr\. [A-Z][a-z]+|Pharmacist|Pharmacy|CRA(?: [A-Z][a-z]+)?|[Tt]he SC|SC|"
+          r"[Tt]he site|[Tt]he Study Coordinator|[Tt]he PI|[Tt]he pharmacist|[Tt]he regulatory coordinator|[Tt]he CRA)")
 _DUE_TAIL = r"(?:\s+(?:by|before|no later than|within)\s+(?P<due>[^()]+?)|\s*\(due\s+(?P<due2>[^)]+)\))?"
 ACTION_RES = [
-    re.compile(rf"^\s*(?:Action:\s*|F/u:\s*)?(?P<owner>{_OWNER})\s+(?:to|will|agreed to)\s+(?P<action>.+?)"
+    re.compile(rf"^\s*(?:\*\s*)?(?:Action:\s*|F/u:\s*|Follow-up:\s*|Pending Items:\s*|Open action item:\s*)?"
+               rf"(?P<owner>{_OWNER})\s+(?:to|will|agreed to|is to)\s+(?P<action>.+?)"
                rf"{_DUE_TAIL}\s*\.?\s*$"),
     re.compile(rf"^\s*-\s*(?P<action>.+?)\s+-\s+(?P<owner>{_OWNER})\s+-\s+(?P<due>.+?)\s*$"),
     re.compile(rf"^\s*AI:\s*(?P<action>.+?)\s*\((?P<owner>{_OWNER}),\s*(?P<due>[^)]+)\)\s*$"),
@@ -87,12 +91,17 @@ NEGATION_RE = re.compile(
     r"complete for all|up to date|is current|on track|ahead of|\badequate|acceptable|caught up|addressed|corrected|"
     r"renewed|filled|recovered|released|stable|meeting expectations|\breconciled|complete and|"
     r"signed and dated correctly|all (?:icfs|queries|ecrf)|capa is in place|(?:was|were) received|updated for|"
-    r"now all entered|added and verified|documents filed", re.I)
+    r"now all entered|added and verified|documents filed|agrees with|within range|in date\b|is consistent|"
+    r"found complete|obtained and documented|query-free|no outstanding|while i was on site|been completed|"
+    r"were provided|are current|signed and on file|have been signed|continuously monitored|meeting expectations|"
+    r"been renewed|have been filed|have been answered|has been restored|is complete\b|are complete\b", re.I)
 HEADING_RE = re.compile(r"^\s*[A-Z][A-Za-z ,&/]{2,45}$")
 CRITICAL_RE = re.compile(
     r"critical|never reported|not reported|before signing|prior to consent|no signed consent|ineligible|wrong dose|"
-    r"expired ip|dispensed before|compromised|lapsed|untrained|denied source|inadequate|no data has been entered|"
-    r"closure|missing from the pharmacy|death", re.I)
+    r"incorrect dose|dosed despite|expired ip|expired investigational|dispensed before|lapsed|untrained|"
+    r"denied source|declined to provide source|death|outside (?:of )?the (?:protocol-mandated )?24-hour|"
+    r"reported (?:to the sponsor )?\d+ days after|reported late|sae report \d+ days later|"
+    r"sae[^.]*(?:late|days later)|late sae", re.I)
 MAJOR_RE = re.compile(
     r"major|significant|well behind|large|repeated|not counted|unaccounted|wrong subject|outside the 24|days after|"
     r"late\b|growing|unresponsive|not provided|unavailable for|not reviewed|has not|not filed|expired|not signed|"
@@ -125,12 +134,7 @@ class RuleParser:
         m = SITE_RE.search(text)
         if m:
             out.append(("SITE", m.start(), m.end()))
-        blocked = re.compile(r"(?:next|last|previous|due|by|before|since|later than|target|pre-visit|lapsed|failure|"
-                             r"from|oldest|aware|on or|excursion|planned for|was on)\W*$", re.I)
-        for m in DATE_RE.finditer(text):
-            if not in_action(m.start()) and not blocked.search(text[max(0, m.start() - 25):m.start()]):
-                out.append(("VISIT_DATE", m.start(), m.end()))
-                break
+        out += self._visit_date(text, in_action)
         for label, patterns in (("MONITOR", MONITOR_RES), ("PI", PI_RES)):
             for rx in patterns:
                 m = next((m for m in rx.finditer(text) if not in_action(m.start("name"))), None)
@@ -149,6 +153,25 @@ class RuleParser:
             if all(sp[2] <= k[1] or sp[1] >= k[2] for k in kept):
                 kept.append(sp)
         return kept
+
+    def _visit_date(self, text: str, in_action) -> list[tuple[str, int, int]]:
+        """Only take a date that the note presents as the visit date; otherwise leave it empty."""
+        m = re.search(r"(?:Date of Visit|Visit Date|Date)\s*:\s*", text, re.I)
+        if m:
+            d = DATE_RE.match(text, m.end())
+            if d:
+                return [("VISIT_DATE", d.start(), d.end())]
+        blocked = re.compile(r"(?:next|last|previous|due|by|before|since|later than|target|pre-visit|lapsed|failure|"
+                             r"from|oldest|aware|on or|excursion|planned for|was on|until)\W*$", re.I)
+        visit_cue = re.compile(r"visit|\bIMV\b|\bSIV\b|\bCOV\b|\bRMV\b|\bFCV\b|today", re.I)
+        first_line_end = text.find("\n") if "\n" in text else len(text)
+        for d in DATE_RE.finditer(text):
+            if in_action(d.start()) or blocked.search(text[max(0, d.start() - 25):d.start()]):
+                continue
+            sent = next(((s, e) for s, e in sentences(text) if s <= d.start() < e), (0, len(text)))
+            if d.start() < first_line_end or visit_cue.search(text[sent[0]:sent[1]]):
+                return [("VISIT_DATE", d.start(), d.end())]
+        return []
 
     def _actions(self, text: str) -> tuple[list[tuple[str, int, int]], list[tuple[int, int]]]:
         spans, ranges = [], []

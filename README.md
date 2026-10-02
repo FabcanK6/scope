@@ -2,81 +2,49 @@
 
 [![tests](https://github.com/FabcanK6/scope/actions/workflows/tests.yml/badge.svg)](https://github.com/FabcanK6/scope/actions/workflows/tests.yml)
 
-SCOPE reads free-text clinical trial site-visit notes (quick field notes, full monitoring reports, visit e-mails) and turns each one into a structured, audit-ready visit record:
+SCOPE reads free-text clinical trial monitoring visit notes (formal visit reports, quick field notes, visit e-mails) and turns each one into a record a CRA or study manager can act on:
 
-- **Site risk level** (low / medium / high) with a calibrated confidence
-- **Active issues** across 12 types, ignoring things the note says are *not* a problem ("no new deviations", "excursion resolved")
-- **Visit metadata**: visit type, date, site, monitor, PI, screened and enrolled counts
-- **Follow-up action items** with owner and due date
-- **Similar past visits** found by meaning, not keywords (sentence embeddings + FAISS)
+- **Risk level** (high / medium / low) computed by a severity rubric reviewed by an experienced CRA, with the reason ("1 critical finding")
+- **Every finding with its evidence**: what is an active problem, what was fixed during the visit, and what was checked and fine, each with the sentence from the note that shows it
+- **Visit details**: visit type, date, site, monitor, PI, screened and enrolled counts
+- **Open action items** with owner and due date
+- **A draft follow-up letter** to the investigator, ready to edit
+- **Portfolio view** across many visits, and similar past visits
 
-**Live app:** [scope-fabcank6.streamlit.app](https://scope-fabcank6.streamlit.app) · **Model:** [huggingface.co/FabcanK6/scope-bert](https://huggingface.co/FabcanK6/scope-bert) · **Train it yourself:** [Open in Colab](https://colab.research.google.com/github/FabcanK6/scope/blob/main/notebooks/train_on_colab.ipynb)
+**Live app:** [scope-fabcank6.streamlit.app](https://scope-fabcank6.streamlit.app)
 
-All notes, sites and people in this repository are synthetic.
+All notes, sites and people in this repository are fictional.
 
 ---
 
 ## The problem
 
-Monitoring visit notes hold the earliest signal that a site is in trouble: a consent signed after procedures, a hospitalization nobody reported as an SAE, queries piling up after a coordinator leaves. But the notes are free text. Someone has to read every one to build the risk view, track the follow-ups, and prove later that each finding was handled.
+Monitoring visit notes hold the earliest warning signs at a trial site: a consent signed after procedures, a hospitalization nobody reported as an SAE, a dosing error. But they are long free text, and most of what they say is "checked, no problem". Someone has to read every note to find the few lines that matter, track the follow-ups, and show later that each finding was handled.
 
-SCOPE does the first pass. A monitor or study manager pastes a note (or a batch of notes) and gets back a record they can review, correct and file.
-
-## Example
-
-Input:
-
-```text
-IMV - Site 104 - 12-Mar-2026
-CRA: J. Okafor | PI: Dr. Patel
-14 screened, 9 randomized
-- 23 queries open > 60 days
-- No new protocol deviations noted.
-- subject 104-007 underwent study procedures before signing the informed consent form.
-CRC to close open queries by 26-Mar-2026.
-Action: Site to document the consent deviation (due next visit).
-```
-
-Output (abridged):
-
-```json
-{
-  "visit": {"visit_type": {"code": "IMV"}, "visit_date": {"iso": "2026-03-12"}, "site": {"id": "104"},
-            "monitor": "J. Okafor", "pi": "Dr. Patel", "screened": 14, "enrolled": 9},
-  "risk": {"level": "high"},
-  "issues": [{"code": "QUERY_AGING"}, {"code": "CONSENT"}],
-  "actions": [
-    {"action": "close open queries", "owner": "CRC", "due": "26-Mar-2026", "due_date": "2026-03-26"},
-    {"action": "document the consent deviation", "owner": "Site", "due": "next visit", "due_date": null}
-  ],
-  "warnings": []
-}
-```
-
-"No new protocol deviations noted" mentions deviations but is not a finding, so it is not flagged.
+SCOPE does the first read. It is built to earn a CRA's trust rather than to impress: every risk call comes with the findings that caused it, every finding comes with a quote from the note, and anything that cannot be traced back to the note is thrown away.
 
 ## How it works
 
 ```text
-note ─► word tokens ─► BERT encoder ──┬─► [CLS] ─► risk head ──────► low / medium / high  ─► temperature scaling
-                                      ├─► [CLS] ─► issue head ─────► 12 sigmoid outputs (multi-label)
-                                      └─► every token ─► tag head ─► BIO tags: VISIT_TYPE, VISIT_DATE, SITE,
-                                                                     MONITOR, PI, SCREENED, ENROLLED, ACTION, OWNER, DUE
-                                   │
-                                   ▼
-                    record builder (deterministic): normalizes dates, counts and visit types,
-                    groups ACTION/OWNER/DUE into action items, adds warnings
-                                   │
-                                   ▼
-            visit record (JSON) · audit summary (Markdown) · portfolio table (CSV) · similar past visits
+note ─► LLM (Google Gemini): instructions + severity rubric + two worked examples
+          returns JSON: visit details, every finding (topic, status, severity, quoted evidence), action items
+     ─► verification (plain code): every quote, name, date and action must appear in the note, or it is dropped
+     ─► rubric (plain code): risk = high / medium / low from the verified active findings
+     ─► visit record · highlighted note · audit summary · follow-up letter · portfolio table
 ```
 
-- **One model, three jobs.** A single fine-tuned encoder with three heads is trained on the sum of three losses (cross-entropy for risk, binary cross-entropy for issues, token cross-entropy for tags). Any Hugging Face encoder works; the notebook compares `bert-base-uncased` with `emilyalsentzer/Bio_ClinicalBERT`, which was pre-trained on clinical notes.
-- **Calibrated risk.** After training, a temperature is fitted on the validation set so that "90% confident" means right about 90% of the time.
-- **Deterministic post-processing.** The model decides *what* the note says; plain code turns that into dates, numbers and action items, so every field in the record can be traced back to highlighted words in the note.
-- **Similar-visit search.** Notes are embedded with `sentence-transformers/all-MiniLM-L6-v2` and indexed with FAISS (inner product on normalized vectors = cosine similarity). A TF-IDF index with the same interface is the keyword baseline.
-- **Rule baseline.** Regular expressions, a keyword list per issue type, NegEx-style negation cues and a points table for risk. It needs no model, so it is both the yardstick and the fallback.
-- **Hybrid parser (default).** Risk and issue flags from the fine-tuned model; visit metadata and action items from the rules, with the model filling in action items the rules miss. This split comes straight from the evaluation below.
+- **The LLM reads; code decides.** The model's job is reading comprehension: is this sentence a problem, something fixed on site, or a confirmation that all is well? The risk level is never the model's opinion. It is computed from the verified findings with a fixed rubric, so the same findings always give the same answer and the rubric can be changed in one place (`scope/llm.py`).
+- **Nothing without evidence.** Every finding must quote the note. SCOPE checks each quote (ignoring case and spacing) and drops findings whose quote is not there, as well as names, dates and action items that do not appear in the note. Anything dropped is listed so the reviewer can see it.
+- **Few-shot, not fine-tuned.** The prompt contains the rubric and two worked examples written in a real CRA's style: a clean visit where a problem was fixed on site, and a late SAE. Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model.
+- **Free and light.** It runs on the free tier of the Gemini API through Python's standard library; the app has no ML framework to install. Answers are cached for 24 hours so repeated notes cost nothing, and each visitor is capped at 25 new requests.
+
+### Why an LLM and not the fine-tuned model
+
+The first version used a fine-tuned BERT model (results below). It was near-perfect on generated notes and caught 7 of 8 high-risk hand-written notes, but a real-style formal report broke it: a routine visit where consent, SDV, drug accountability and storage were all confirmed fine, and one data-entry gap was fixed on site, came back as **high risk at 100% confidence**. The model had learned that mentioning a topic usually means a problem. Real reports mention every topic, mostly to say it is fine, and judging that is reading comprehension, which is what large language models do well. The fine-tuned model and its training pipeline stay in the repository as the baseline.
+
+### Severity rubric
+
+Each active finding scores 1 (minor), 3 (major) or 6 (critical): any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Critical findings include a late or unreported SAE, procedures before consent, an ineligible subject dosed, dosing errors, expired or compromised IP being used, enrolling after IRB approval lapsed, untrained staff running visits, and refusal of source access; they stay active even when a CAPA is in place. Findings corrected and verified during the visit do not count.
 
 ### Issue types
 
@@ -87,11 +55,26 @@ note ─► word tokens ─► BERT encoder ──┬─► [CLS] ─► risk he
 | Protocol & drug | protocol deviation, IP accountability, IP temperature excursion |
 | Site operations | staff turnover / training gap, PI oversight gap, enrollment behind target, regulatory binder / essential documents |
 
-Risk follows a fixed rubric: each active issue scores 1 (minor), 3 (major) or 6 (critical) points; 0–1 = low, 2–5 = medium, 6+ = high. The model learns to read severity from the wording ("a handful of pages" vs "no data entered for the last 8 visits").
 
-## Data
+## Setup (free Gemini API key)
 
-There is no public corpus of monitoring visit notes, so SCOPE is trained on a synthetic generator (`scope/data/generate.py`) that writes notes in three styles (terse field notes, sectioned reports, narrative paragraphs) with labelled spans, issue flags and risk. Every note mixes real findings with **negated and resolved mentions** ("no consent issues identified", "the excursion from January was assessed and the kits released"), which is where keyword systems fail.
+1. Create a free key at [aistudio.google.com](https://aistudio.google.com) (Get API key → Create API key).
+2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model and moves on if one is not available on the free tier.
+3. Locally: `export GEMINI_API_KEY=...`, then `streamlit run app/streamlit_app.py` or `python -m scope.llm --file note.txt --letter`.
+
+Visitors can also paste their own key in the app's sidebar; it stays in their browser session. Free-tier requests may be used by the provider, so only send fictional or de-identified notes. A deployment on real study data would need an enterprise LLM agreement covering PHI.
+
+## Evaluation
+
+```bash
+GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
+```
+
+Test sets: **realistic** (7 long, formal notes in the style of real CRA reports, provided by an experienced CRA; two of them are the prompt's worked examples and are excluded) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the prompt, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
+
+### v1 training data
+
+There is no public corpus of monitoring visit notes, so the v1 model was trained on a synthetic generator (`scope/data/generate.py`) that writes notes in three styles (terse field notes, sectioned reports, narrative paragraphs) with labelled spans, issue flags and risk. Every note mixes real findings with **negated and resolved mentions** ("no consent issues identified", "the excursion from January was assessed and the kits released"), which is where keyword systems fail.
 
 | Split | Notes | What it tests |
 |---|---|---|
@@ -102,9 +85,10 @@ There is no public corpus of monitoring visit notes, so SCOPE is trained on a sy
 
 The hand-written set is small but it is the most honest test: it was not produced by the generator at all.
 
-## Results
 
-Four parsers on three test sets. The **hybrid** (BERT for risk and issues, rules for format-bound fields) is what the app uses.
+### v1 results (fine-tuned BERT, before the LLM engine)
+
+These numbers were measured with the first severity rubric, before the formal-report notes and rubric v2 were added. Four parsers on three test sets.
 
 **Hand-written notes** (24 notes, never produced by the generator: the hardest and most realistic test)
 
@@ -135,7 +119,8 @@ What the numbers say:
 
 Training: 12,000 notes, 3 epochs, batch 16, learning rate 5e-5 (heads 1e-3), about 9 minutes per model on a free Colab T4. An action item only counts as correct when the action text, owner and due date all match.
 
-### Similar-visit search
+
+#### Similar-visit search (v1)
 
 A hit counts as relevant when it shares an active issue type with the query note. The bank holds 400 past (synthetic) visits.
 
@@ -148,6 +133,7 @@ A hit counts as relevant when it shares an active issue type with the query note
 
 I expected general-purpose embeddings to pull ahead when the wording changes. They did not: on hand-written queries, keyword search was better (with only 19 queries, the gap is about six hits). The likely reasons are that domain terms such as "ICF", "SAE" and "SDV" carry most of the signal and TF-IDF weights them directly, while an off-the-shelf sentence model also encodes writing style and treats "no SAEs reported" as close to "SAE reported late". What makes search useful in practice is the structured filter: the app can restrict results to past visits that share an issue the model detected, which is a precise signal rather than a fuzzy one. Next steps would be a domain-tuned embedding model or hybrid keyword + vector ranking, judged on real queries.
 
+
 ## Comparison with Amazon Comprehend Medical
 
 `scripts/compare_comprehend_medical.py` sends the same synthetic notes to Amazon Comprehend Medical (`DetectEntitiesV2`) and compares what can be compared: dates and person names. Comprehend Medical is a general medical NLP service; it has no concept of a visit type, an issue flag, a risk level or an action item, which is the gap a domain-tuned model fills. The script prints a cost estimate and only calls AWS with `--yes`.
@@ -158,56 +144,54 @@ python scripts/compare_comprehend_medical.py --data data/test_unseen.jsonl --max
 python scripts/compare_comprehend_medical.py --data data/test_unseen.jsonl --max-notes 50 --yes    # run
 ```
 
+
 ## Quick start
 
 ```bash
 git clone https://github.com/FabcanK6/scope.git && cd scope
 pip install -r requirements-dev.txt
+export GEMINI_API_KEY=...                                   # free key from aistudio.google.com
 
-python -m scope.data.generate --out data                 # synthetic notes
-python -m scope.evaluate --backend rules                 # rule baseline on all test sets
-python -m scope.cli --backend rules "IMV Site 104 12-Mar-2026. 23 queries open > 60 days. CRC to close queries by 26-Mar-2026."
-
-# fine-tune (a GPU helps; the Colab notebook takes about 10-15 minutes on a free T4)
-python -m scope.train --model bert-base-uncased --out models/scope-bert --fp16
-python -m scope.evaluate --model models/scope-bert --backend hybrid   # or --backend bert
-
-python -m scope.search --eval                            # embeddings vs TF-IDF retrieval
-streamlit run app/streamlit_app.py                       # downloads FabcanK6/scope-bert on first run
+streamlit run app/streamlit_app.py
+python -m scope.llm --file note.txt --letter                # one note from the command line
+python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
 pytest -q
+
+# v1 baseline (fine-tuned BERT): see notebooks/train_on_colab.ipynb
+pip install -r requirements-train.txt
+python -m scope.data.generate --out data && python -m scope.evaluate --backend rules
 ```
 
 ## Repository layout
 
 ```text
 scope/
-  schema.py            labels: risk levels, 12 issue types, span types
-  text.py              tokenization with character offsets, BIO helpers
-  data/generate.py     synthetic note generator (styles, negations, held-out phrasings)
-  data/templates.py    sentence banks and value pools
-  data/handwritten.*   24 hand-written evaluation notes and their loader
-  rules.py             regex + keyword + negation baseline
-  model.py             BERT encoder with risk, issue and tag heads; temperature scaling
-  train.py             fine-tuning loop
-  predict.py           BERT and rule parsers with one interface
-  record.py            visit record, action-item assembly, audit summary
-  search.py            similar-visit search (sentence embeddings + FAISS, TF-IDF baseline)
+  engine.py            the LLM engine: prompt with rubric and worked examples, verification, record
+  llm.py               Gemini client (standard library), rubric scoring, quote checks, follow-up letter
+  record.py            visit record, date and count normalization, audit summary
+  schema.py            issue types, severity points, risk thresholds
+  search.py            similar past visits (TF-IDF; embeddings optional)
   metrics.py           risk, issue, span, action-item and calibration metrics
-  evaluate.py          evaluation CLI
-  cli.py               analyze one note from the command line
-app/streamlit_app.py   web app: single note, highlighted spans, similar visits, audit summary, portfolio view
-notebooks/             Colab training notebook
-scripts/               Amazon Comprehend Medical comparison
-tests/                 unit tests (including a tiny randomly initialised BERT)
+  evaluate.py          evaluation CLI for every engine
+  data/realistic.txt   7 realistic notes (development set)
+  data/handwritten.*   24 hand-written evaluation notes and their loader
+  data/generate.py     synthetic note generator (v1 training data)
+  model.py, train.py   v1 fine-tuned BERT (baseline)
+  rules.py             regex + keyword baseline
+  predict.py           v1 parsers (BERT, rules, hybrid)
+app/streamlit_app.py   web app
+notebooks/             Colab notebook for the v1 baseline
+scripts/               teacher-note generation with an LLM; Amazon Comprehend Medical comparison
+tests/                 unit tests (the LLM is replaced by a fake, so tests need no key or network)
 ```
 
 ## Limitations
 
-- Trained on synthetic notes. Real notes are messier and use site- and sponsor-specific vocabulary; the hand-written set shows the drop to expect, and real use needs a labelled sample of real (de-identified) notes for evaluation and fine-tuning.
-- Risk is defined by a fixed points rubric. Organizations weight findings differently, so the rubric (and labels) should be adapted before use.
-- Confidence scores are calibrated on synthetic data only; on differently written notes the model can be confidently wrong (see Results).
-- Notes longer than the model's 512-token window are cut off; the record shows a warning when that happens.
-- SCOPE supports human review; it does not replace it. Every field links back to the words it came from so a reviewer can check it quickly.
+- Needs an internet connection and API quota. When the free quota runs out, the app says so; visitors can use their own free key.
+- LLM output can vary between runs and between model versions. Verification and the fixed rubric limit the impact, and `GEMINI_MODEL` pins a version; re-run the evaluation whenever the model changes.
+- The realistic test notes are few and shaped the prompt. Real use needs a larger, independent set of de-identified notes reviewed by CRAs.
+- The rubric reflects one experienced reviewer; organizations weight findings differently and should adapt it.
+- SCOPE supports human review; it does not replace it.
 
 ## License
 

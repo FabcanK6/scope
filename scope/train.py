@@ -76,6 +76,8 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--train", default="data/train.jsonl")
     ap.add_argument("--val", default="data/val.jsonl")
+    ap.add_argument("--extra-train", nargs="*", default=[],
+                    help="extra training files, e.g. LLM-written notes from scripts/generate_teacher_notes.py")
     ap.add_argument("--model", default="bert-base-uncased", help="any Hugging Face encoder with a fast tokenizer")
     ap.add_argument("--out", default="models/scope-bert")
     ap.add_argument("--epochs", type=int, default=3)
@@ -97,6 +99,11 @@ def main(argv: list[str] | None = None) -> None:
     print(f"device: {device}")
 
     train_rows = read_jsonl(args.train)[: args.limit]
+    for extra in args.extra_train:
+        if Path(extra).exists():
+            more = read_jsonl(extra)
+            print(f"adding {len(more)} training notes from {extra}")
+            train_rows += more
     val_rows = read_jsonl(args.val)
     tokenizer = load_tokenizer(args.model)
     model = ScopeModel.from_encoder_name(args.model, dropout=args.dropout).to(device)

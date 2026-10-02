@@ -1,11 +1,13 @@
 """Evaluate a parser on one or more test sets.
 
+    GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
     python -m scope.evaluate --backend rules
     python -m scope.evaluate --model models/scope-bert --report reports/bert.json
     python -m scope.evaluate --model models/scope-bert --data data/test_unseen.jsonl --errors 5
 
-``--data`` takes JSONL files and/or the word ``handwritten`` (the built-in set of
-hand-written notes). The default is all three test sets.
+``--data`` takes JSONL files and/or the built-in sets ``handwritten`` (24 hand-written
+notes) and ``realistic`` (7 long, formal notes in the style of real CRA reports).
+The default is all four test sets.
 """
 
 from __future__ import annotations
@@ -15,14 +17,15 @@ import json
 from pathlib import Path
 
 from scope.data.generate import read_jsonl
-from scope.data.handwritten import load_handwritten
+from scope.data.handwritten import load_handwritten, load_realistic
 from scope.metrics import evaluate_predictions, format_report, headline
 
-DEFAULT_SETS = ["data/test.jsonl", "data/test_unseen.jsonl", "handwritten"]
+DEFAULT_SETS = ["data/test.jsonl", "data/test_unseen.jsonl", "handwritten", "realistic"]
+BUILTIN_SETS = {"handwritten": load_handwritten, "realistic": load_realistic}
 
 
 def load_set(name: str) -> list[dict]:
-    return load_handwritten() if name == "handwritten" else read_jsonl(name)
+    return BUILTIN_SETS[name]() if name in BUILTIN_SETS else read_jsonl(name)
 
 
 def show_errors(rows: list[dict], preds: list[dict], k: int) -> None:
@@ -45,8 +48,11 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", nargs="+", default=DEFAULT_SETS)
     ap.add_argument("--model", default="models/scope-bert")
-    ap.add_argument("--backend", choices=["auto", "hybrid", "bert", "rules"], default="auto",
-                    help="auto = plain BERT if a checkpoint exists, else rules")
+    ap.add_argument("--backend", choices=["auto", "llm", "hybrid", "bert", "rules"], default="auto",
+                    help="llm = the Gemini engine used by the app; auto = plain BERT if a checkpoint exists, "
+                         "else rules")
+    ap.add_argument("--sleep", type=float, default=4.0, help="seconds between LLM requests (free-tier friendly)")
+    ap.add_argument("--limit", type=int, default=None, help="only the first N notes of each set")
     ap.add_argument("--report", default=None, help="write the full metrics to this JSON file")
     ap.add_argument("--errors", type=int, default=0, help="print this many misclassified notes per set")
     ap.add_argument("--quiet", action="store_true", help="only print the summary table")
@@ -54,7 +60,14 @@ def main(argv: list[str] | None = None) -> None:
 
     from scope.predict import BertParser, HybridParser, RuleBasedParser, load_parser
 
-    if args.backend == "rules":
+    skip: set[str] = set()
+    if args.backend == "llm":
+        from scope.engine import FEW_SHOT_IDS, LLMParser
+        from scope.llm import GeminiClient, get_api_key
+
+        parser = LLMParser(GeminiClient(get_api_key() or ""), sleep=args.sleep)
+        skip = FEW_SHOT_IDS  # these notes are worked examples inside the prompt
+    elif args.backend == "rules":
         parser = RuleBasedParser()
     elif args.backend == "bert":
         parser = BertParser.from_dir(args.model)
@@ -66,13 +79,13 @@ def main(argv: list[str] | None = None) -> None:
 
     reports, table = {}, []
     for name in args.data:
-        if name != "handwritten" and not Path(name).exists():
+        if name not in BUILTIN_SETS and not Path(name).exists():
             print(f"skipping {name} (not found)")
             continue
-        rows = load_set(name)
+        rows = [r for r in load_set(name) if r.get("id") not in skip][: args.limit]
         preds = parser.predict_batch([r["text"] for r in rows])
         rep = evaluate_predictions(rows, preds)
-        label = Path(name).stem if name != "handwritten" else "handwritten"
+        label = name if name in BUILTIN_SETS else Path(name).stem
         reports[label] = rep
         table.append((label, headline(rep)))
         if not args.quiet:

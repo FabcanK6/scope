@@ -1,15 +1,16 @@
-"""SCOPE Streamlit front end.
+"""SCOPE Streamlit front end (LLM engine).
 
+    export GEMINI_API_KEY=...        # or add it to .streamlit/secrets.toml / the app's Secrets
     streamlit run app/streamlit_app.py
-    SCOPE_MODEL_DIR=models/scope-bert streamlit run app/streamlit_app.py
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
-import os
 import sys
+import time
 from pathlib import Path
 
 import altair as alt
@@ -20,173 +21,265 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scope.data.generate import read_jsonl  # noqa: E402
-from scope.data.handwritten import load_handwritten  # noqa: E402
-from scope.predict import RuleBasedParser, load_parser  # noqa: E402
-from scope.record import audit_summary, build_record, to_row  # noqa: E402
+from scope.data.handwritten import load_handwritten, load_realistic  # noqa: E402
+from scope.engine import LLMParser  # noqa: E402
+from scope.llm import GeminiClient, LLMError, draft_followup, get_api_key  # noqa: E402
+from scope.record import audit_summary, to_row  # noqa: E402
 from scope.schema import ISSUE_BY_CODE, ISSUE_GROUPS  # noqa: E402
 
-MODEL_DIR = os.environ.get("SCOPE_MODEL_DIR", "models/scope-bert")
-# Public Hugging Face repo with the trained checkpoint; downloaded on first run if MODEL_DIR is empty.
-HF_MODEL_REPO = os.environ.get("SCOPE_HF_MODEL", "FabcanK6/scope-bert")
 CORPUS = ROOT / "data" / "corpus.jsonl"
-SPAN_COLORS = {"VISIT_TYPE": "#4C78A8", "VISIT_DATE": "#B279A2", "SITE": "#F58518", "MONITOR": "#72B7B2",
-               "PI": "#54A24B", "SCREENED": "#9D755D", "ENROLLED": "#9D755D", "ACTION": "#E45756",
-               "OWNER": "#EECA3B", "DUE": "#FF9DA6"}
 RISK_COLORS = {"low": "#2E7D32", "medium": "#ED6C02", "high": "#C62828"}
+SEVERITY_COLORS = {"critical": "#C62828", "major": "#ED6C02", "minor": "#B8860B"}
+STATUS_COLORS = {"resolved_on_site": "#1565C0", "no_issue": "#2E7D32"}
+MAX_NEW_CALLS = 25  # new LLM requests per browser session (cached answers are free)
+PORTFOLIO_MAX = 10
 
 st.set_page_config(page_title="SCOPE - Site Visit Note Intelligence", page_icon="🩺", layout="wide")
 
 
-@st.cache_resource(show_spinner="Downloading the SCOPE model (first run only)...")
-def ensure_model() -> bool:
-    if (Path(MODEL_DIR) / "scope_model.pt").exists():
-        return True
-    if not HF_MODEL_REPO:
-        return False
+# ---------------------------------------------------------------------------
+# LLM access and caching
+# ---------------------------------------------------------------------------
+def _secret(name: str):
     try:
-        from huggingface_hub import snapshot_download
+        return st.secrets.get(name)
+    except Exception:  # no secrets configured
+        return None
 
-        snapshot_download(HF_MODEL_REPO, local_dir=MODEL_DIR)
-    except Exception as exc:  # network issues, missing repo, ...
-        st.sidebar.warning(f"Could not download `{HF_MODEL_REPO}`: {exc}")
-    return (Path(MODEL_DIR) / "scope_model.pt").exists()
+
+def api_key() -> str | None:
+    return st.session_state.get("byo_key") or get_api_key(st.secrets if _secret("GEMINI_API_KEY") else None)
+
+
+def get_parser() -> LLMParser | None:
+    key = api_key()
+    if not key:
+        return None
+    parser = st.session_state.get("parser")
+    if parser is None or parser.client.api_key != key:
+        parser = LLMParser(GeminiClient(key, model=_secret("GEMINI_MODEL")))
+        st.session_state["parser"] = parser
+    return parser
 
 
 @st.cache_resource
-def get_parser(backend: str):
-    return RuleBasedParser() if backend == "rules" else load_parser(MODEL_DIR, backend=backend)
+def shared_cache() -> dict:
+    """Answers shared by all visitors for 24 hours, so repeated example notes cost no quota."""
+    return {}
 
 
-@st.cache_resource(show_spinner="Building the similar-visit index (first run only)...")
+def _cache_key(kind: str, text: str) -> str:
+    fp = hashlib.sha256((api_key() or "").encode()).hexdigest()[:12]
+    return f"{kind}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
+
+
+def cached_llm(kind: str, text: str, fn):
+    cache, key = shared_cache(), _cache_key(kind, text)
+    hit = cache.get(key)
+    if hit and time.time() - hit[0] < 24 * 3600:
+        return hit[1]
+    used = st.session_state.get("llm_calls", 0)
+    if used >= MAX_NEW_CALLS:
+        raise LLMError(f"This session has used its {MAX_NEW_CALLS} new LLM requests. Reload the page later.")
+    st.session_state["llm_calls"] = used + 1
+    value = fn()
+    cache[key] = (time.time(), value)
+    return value
+
+
+@st.cache_resource(show_spinner=False)
 def get_index():
     from scope.search import NoteIndex
 
-    rows = read_jsonl(CORPUS)
-    try:
-        return NoteIndex(rows, backend="embeddings")
-    except Exception:  # sentence-transformers unavailable -> keyword search
-        return NoteIndex(rows, backend="tfidf")
+    return NoteIndex(read_jsonl(CORPUS), backend="tfidf")
 
 
 @st.cache_data
 def examples() -> dict[str, str]:
-    notes = {r["id"]: r["text"] for r in load_handwritten()}
-    picks = {"Quick field note (high risk)": "hw-01", "Structured report": "hw-03", "Clean remote visit": "hw-02",
-             "Missed SAE": "hw-04", "E-mail style": "hw-18", "Bullet notes": "hw-16", "Drug and dosing": "hw-07"}
+    notes = {r["id"]: r["text"] for r in load_handwritten() + load_realistic()}
+    picks = {"Formal IMV report (clean)": "real-01", "For-cause visit (late SAE)": "real-05",
+             "SIV with a pending item": "real-04", "IMV with a deviation": "real-03",
+             "Quick field note": "hw-01", "Missed SAE": "hw-04", "E-mail style": "hw-18", "Bullet notes": "hw-16"}
     return {label: notes[i] for label, i in picks.items()}
 
 
-def highlight(text: str, spans: list[dict]) -> str:
+# ---------------------------------------------------------------------------
+# Display helpers
+# ---------------------------------------------------------------------------
+def risk_badge(level: str) -> str:
+    return (f"<span style='background:{RISK_COLORS[level]};color:white;padding:5px 14px;border-radius:14px;"
+            f"font-weight:700;font-size:1.05rem'>{level.upper()} RISK</span>")
+
+
+def risk_reason(rec: dict) -> str:
+    sev = [i["severity"] for i in rec["issues"] if i.get("severity")]
+    if not sev:
+        return "No active findings."
+    counts = {s: sev.count(s) for s in ("critical", "major", "minor") if s in sev}
+    parts = [f"{n} {s}" for s, n in counts.items()]
+    return "Because of " + ", ".join(parts) + " finding" + ("s" if len(sev) > 1 else "") + " (severity rubric)."
+
+
+def highlight(text: str, rec: dict) -> str:
+    regions = []
+    for f in rec.get("findings", []):
+        if f.get("verified") and f.get("char_start", -1) >= 0:
+            color = SEVERITY_COLORS[f["severity"]] if f["status"] == "active" else STATUS_COLORS[f["status"]]
+            label = f"{f['display']} · {f['severity'] if f['status'] == 'active' else f['status'].replace('_', ' ')}"
+            regions.append((f["char_start"], f["char_end"], color, label))
+    for sp in rec["spans"]:
+        if sp["label"] in ("ACTION", "OWNER", "DUE", "VISIT_DATE", "VISIT_TYPE", "SITE"):
+            regions.append((sp["char_start"], sp["char_end"], "#6A1B9A", sp["label"].replace("_", " ").lower()))
     out, pos = [], 0
-    for sp in sorted(spans, key=lambda s: s["char_start"]):
-        if sp["char_start"] < pos:
+    for s, e, color, label in sorted(regions):
+        if s < pos:
             continue
-        out.append(html.escape(text[pos:sp["char_start"]]))
-        color = SPAN_COLORS.get(sp["label"], "#999")
-        out.append(f"<span style='background:{color}33;border-bottom:2px solid {color};padding:1px 3px;"
-                   f"border-radius:4px'>{html.escape(text[sp['char_start']:sp['char_end']])}"
-                   f"<sub style='color:{color};font-size:0.65em;margin-left:3px'>{sp['label']}</sub></span>")
-        pos = sp["char_end"]
+        out.append(html.escape(text[pos:s]))
+        out.append(f"<span title='{html.escape(label)}' style='background:{color}22;border-bottom:2px solid "
+                   f"{color};padding:1px 2px;border-radius:3px'>{html.escape(text[s:e])}"
+                   f"<sub style='color:{color};font-size:0.62em;margin-left:3px'>{html.escape(label)}</sub></span>")
+        pos = e
     out.append(html.escape(text[pos:]))
-    return "<div style='line-height:2.0;font-size:0.95rem'>" + "".join(out).replace("\n", "<br>") + "</div>"
+    return "<div style='line-height:2.1;font-size:0.95rem'>" + "".join(out).replace("\n", "<br>") + "</div>"
 
 
-def risk_badge(level: str, conf: float | None) -> str:
-    c = RISK_COLORS[level]
-    extra = f" &middot; {conf:.0%} confidence" if conf else ""
-    return (f"<span style='background:{c};color:white;padding:4px 12px;border-radius:12px;font-weight:600'>"
-            f"{level.upper()} RISK</span><span style='color:gray'>{extra}</span>")
+def findings_table(rec: dict, status: str) -> pd.DataFrame:
+    rows = [{"Issue": f["display"], "Severity": f["severity"], "Evidence (quoted from the note)": f["evidence"],
+             "Why": f.get("explanation", "")}
+            for f in rec.get("findings", []) if f["status"] == status and f.get("verified")]
+    order = {"critical": 0, "major": 1, "minor": 2}
+    rows.sort(key=lambda r: order.get(r["Severity"], 3))
+    if status != "active":
+        for r in rows:
+            r.pop("Severity")
+    return pd.DataFrame(rows)
 
 
 # ---------------------------------------------------------------------------
 st.title("🩺 SCOPE")
-st.caption("Site Communication & Oversight Processing Engine · turns free-text site-visit notes into "
-           "structured, audit-ready visit records")
+st.caption("Site Communication & Oversight Processing Engine · reads free-text site-visit notes and returns a "
+           "risk level, every finding with its evidence, the action items, and a draft follow-up letter")
 
 with st.sidebar:
-    has_model = ensure_model()
-    backend = st.radio("Parser", ["hybrid", "bert", "rules"], index=0 if has_model else 2,
-                       help="'hybrid' (recommended): BERT for risk and issues, rules for dates, site and counts. "
-                            "'bert': the fine-tuned model alone. 'rules': the regex + keyword baseline.")
-    if backend != "rules" and not has_model:
-        st.warning(f"No checkpoint at `{MODEL_DIR}`, so the rule-based parser is used instead.")
     st.markdown("**Example notes**")
     for label, text in examples().items():
         if st.button(label, width="stretch"):
             st.session_state["note"] = text
     st.caption("All notes, sites and people in this app are fictional.")
+    st.divider()
+    st.markdown("**Engine:** Google Gemini, checked by SCOPE")
+    if _secret("GEMINI_API_KEY") and not st.session_state.get("byo_key"):
+        st.caption("Using the app's shared free quota.")
+    st.text_input("Your own Gemini API key (optional)", type="password", key="byo_key",
+                  help="Free key from aistudio.google.com. Kept only in this browser session.")
+    st.caption("Notes are sent to Google's Gemini API. Only use fictional or de-identified notes.")
+    with st.expander("How SCOPE decides"):
+        st.markdown(
+            "1. The LLM reads the note and lists every topic it mentions: an **active** problem, something "
+            "**fixed during the visit**, or **confirmed fine**, each with a quote from the note.\n"
+            "2. SCOPE checks every quote, name, date and action against the note and drops anything that is "
+            "not there.\n"
+            "3. SCOPE applies the severity rubric: any critical finding or two major findings = high; one major "
+            "or three minor = medium; otherwise low. Late or unreported SAEs, consent after procedures and "
+            "dosing errors are critical.")
 
+parser = get_parser()
 tab_one, tab_batch = st.tabs(["Analyze a note", "Portfolio view"])
 
 with tab_one:
-    note = st.text_area("Site-visit note", key="note", height=220,
-                        placeholder="Paste a monitoring visit note, field note or visit e-mail...")
-    if note.strip():
-        parser = get_parser(backend)
-        rec = parser.analyze(note)
+    note = st.text_area("Site-visit note", key="note", height=230,
+                        placeholder="Paste a monitoring visit report, field note or visit e-mail...")
+    rec = None
+    if not parser:
+        st.info("SCOPE needs a Gemini API key to read notes. Paste a free key from aistudio.google.com in the "
+                "sidebar, or add `GEMINI_API_KEY` to the app's secrets.")
+    elif note.strip():
+        try:
+            with st.spinner("Reading the note..."):
+                rec = cached_llm("record", note, lambda: parser.analyze(note))
+        except LLMError as e:
+            st.error(str(e))
+    if rec:
         v = rec["visit"]
+        c1, c2, c3, c4 = st.columns([1.6, 1, 1, 1])
+        c1.markdown(risk_badge(rec["risk"]["level"]), unsafe_allow_html=True)
+        c1.caption(risk_reason(rec))
+        c2.metric("Site", v["site"]["id"] or "-")
+        c3.metric("Visit date", v["visit_date"]["iso"] or (v["visit_date"]["text"] or "-"))
+        c4.metric("Visit type", v["visit_type"]["code"] or "-")
+        if rec.get("summary"):
+            st.markdown(f"> {rec['summary']}")
+        if rec["review"]["needed"]:
+            st.warning("**Check before relying on this:** " + "; ".join(rec["review"]["reasons"]) + ".")
 
-        c1, c2, c3, c4 = st.columns([1.4, 1, 1, 1])
-        c1.markdown(risk_badge(rec["risk"]["level"], rec["risk"]["confidence"]), unsafe_allow_html=True)
-        c2.metric("Site", v["site"]["id"] or "?")
-        c3.metric("Visit date", v["visit_date"]["iso"] or (v["visit_date"]["text"] or "?"))
-        c4.metric("Visit type", v["visit_type"]["code"] or "?")
-        for w in rec["warnings"]:
-            st.warning(w)
-
-        t_rec, t_note, t_sim, t_audit, t_json = st.tabs(
-            ["Visit record", "Highlighted note", "Similar past visits", "Audit summary", "JSON"])
-        with t_rec:
-            left, right = st.columns(2)
-            with left:
-                st.subheader("Active issues")
-                if rec["issues"]:
-                    for grp in ISSUE_GROUPS:
-                        items = [i for i in rec["issues"] if i["group"] == grp]
-                        if items:
-                            st.markdown(f"**{grp}**")
-                            for i in items:
-                                conf = f" ({i['confidence']:.0%})" if i["confidence"] < 1 else ""
-                                st.markdown(f"- {i['display']}{conf}")
-                else:
-                    st.success("No active issues found.")
-                if rec["risk"]["probabilities"]:
-                    probs = pd.DataFrame({"risk": list(rec["risk"]["probabilities"]),
-                                          "probability": list(rec["risk"]["probabilities"].values())})
-                    st.altair_chart(alt.Chart(probs).mark_bar().encode(
-                        x=alt.X("probability:Q", scale=alt.Scale(domain=[0, 1])),
-                        y=alt.Y("risk:N", sort=["low", "medium", "high"]),
-                        color=alt.Color("risk:N", scale=alt.Scale(domain=list(RISK_COLORS),
-                                                                  range=list(RISK_COLORS.values())), legend=None),
-                    ).properties(height=120, title="Risk probabilities"), width="stretch")
-                    st.caption("Calibrated on synthetic validation notes; on differently written notes the model "
-                               "can be more confident than it should be.")
-            with right:
-                st.subheader("Visit details")
-                st.markdown(
-                    f"- **Visit type:** {v['visit_type']['name'] or '-'}  \n"
-                    f"- **Monitor:** {v['monitor'] or '-'}  \n- **PI:** {v['pi'] or '-'}  \n"
-                    f"- **Screened / enrolled:** {v['screened'] if v['screened'] is not None else '-'} / "
-                    f"{v['enrolled'] if v['enrolled'] is not None else '-'}")
-                st.subheader("Action items")
-                if rec["actions"]:
-                    st.dataframe(pd.DataFrame([{"Action": a["action"], "Owner": a["owner"] or "-",
-                                                "Due": a["due_date"] or a["due"] or "-"} for a in rec["actions"]]),
+        t_find, t_note, t_act, t_letter, t_sim, t_audit, t_json = st.tabs(
+            ["Findings", "Highlighted note", "Visit details & actions", "Follow-up letter", "Similar past visits",
+             "Audit summary", "JSON"])
+        with t_find:
+            active = findings_table(rec, "active")
+            st.subheader(f"Active findings ({len(active)})")
+            if len(active):
+                st.dataframe(active, hide_index=True, width="stretch")
+            else:
+                st.success("No active problems in this note.")
+            fixed = findings_table(rec, "resolved_on_site")
+            if len(fixed):
+                st.subheader(f"Fixed during the visit ({len(fixed)})")
+                st.dataframe(fixed, hide_index=True, width="stretch")
+            fine = findings_table(rec, "no_issue")
+            if len(fine):
+                with st.expander(f"Checked and fine ({len(fine)})"):
+                    st.dataframe(fine, hide_index=True, width="stretch")
+            ignored = [f for f in rec.get("findings", []) if not f.get("verified")]
+            if ignored:
+                with st.expander(f"Ignored: quote not found in the note ({len(ignored)})"):
+                    st.dataframe(pd.DataFrame([{"Issue": f["display"], "Status": f["status"],
+                                                "Claimed quote": f["evidence"]} for f in ignored]),
                                  hide_index=True, width="stretch")
-                else:
-                    st.info("No action items found.")
+            st.caption(f"Read by {rec.get('model') or 'Gemini'}; risk computed by SCOPE's rubric from the verified "
+                       "active findings.")
         with t_note:
-            st.markdown(highlight(note, rec["spans"]), unsafe_allow_html=True)
+            st.markdown(highlight(note, rec), unsafe_allow_html=True)
+        with t_act:
+            st.markdown(
+                f"- **Visit type:** {v['visit_type']['name'] or v['visit_type']['text'] or '-'}  \n"
+                f"- **Monitor:** {v['monitor'] or '-'}  \n- **PI:** {v['pi'] or '-'}  \n"
+                f"- **Screened / enrolled:** {v['screened'] if v['screened'] is not None else '-'} / "
+                f"{v['enrolled'] if v['enrolled'] is not None else '-'}")
+            st.subheader("Open action items")
+            if rec["actions"]:
+                st.dataframe(pd.DataFrame([{"Action": a["action"], "Owner": a["owner"] or "-",
+                                            "Due": a["due_date"] or a["due"] or "-"} for a in rec["actions"]]),
+                             hide_index=True, width="stretch")
+            else:
+                st.info("No open action items in the note.")
+            for w in rec["warnings"]:
+                st.caption(f"Note: {w}")
+        with t_letter:
+            if st.button("Draft follow-up letter"):
+                try:
+                    with st.spinner("Drafting..."):
+                        st.session_state["letter"] = (note, cached_llm(
+                            "letter", note, lambda: draft_followup(parser.client, rec)))
+                except LLMError as e:
+                    st.error(str(e))
+            letter = st.session_state.get("letter")
+            if letter and letter[0] == note:
+                edited = st.text_area("Draft (edit before sending)", letter[1], height=420)
+                st.download_button("Download letter (.md)", edited, "follow_up_letter.md", "text/markdown")
+                st.caption("Built only from the verified findings and action items; missing details are left as "
+                           "[placeholders].")
         with t_sim:
-            only_shared = st.checkbox("Only show visits that share an active issue", value=bool(rec["issues"]))
             index = get_index()
-            hits = index.search(note, k=5, issue_filter=[i["code"] for i in rec["issues"]] if only_shared else None)
-            st.caption(f"Search backend: {index.backend} over {len(index.rows)} past (synthetic) visits.")
+            codes = [i["code"] for i in rec["issues"]]
+            only_shared = st.checkbox("Only show visits that share an active issue", value=bool(codes))
+            hits = index.search(note, k=5, issue_filter=codes if only_shared else None)
+            st.caption(f"Keyword search over {len(index.rows)} past (synthetic) visits.")
             for h in hits:
                 m = h["meta"]
                 issues = ", ".join(ISSUE_BY_CODE[c].display for c in h["issues"]) or "no active issues"
-                with st.expander(f"{h['score']:.2f} · Site {m.get('site_id', '?')} · {m.get('visit_date', '?')} · "
-                                 f"{h['risk']} risk · {issues}"):
+                with st.expander(f"Site {m.get('site_id', '?')} · {m.get('visit_date', '?')} · {h['risk']} risk · "
+                                 f"{issues}"):
                     st.text(h["text"])
         with t_audit:
             md = audit_summary(rec)
@@ -198,36 +291,42 @@ with tab_one:
                                "application/json")
 
 with tab_batch:
-    st.markdown("Run SCOPE over many visits at once and see where the risk is. Upload a CSV with a `note` "
-                "column, or use the bundled sample of past (synthetic) visits.")
+    st.markdown(f"Run SCOPE over several visits and see where the risk is. Upload a CSV with a `note` column "
+                f"(first {PORTFOLIO_MAX} rows), or use a sample of past (synthetic) visits.")
     up = st.file_uploader("CSV with a 'note' column", type=["csv"])
-    n = st.slider("Sample size", 10, 100, 40, step=10)
     texts: list[str] = []
     if up is not None:
         df_in = pd.read_csv(up)
         if "note" not in df_in.columns:
             st.error("The CSV needs a column named 'note'.")
         else:
-            texts = df_in["note"].astype(str).tolist()[:500]
-    elif st.button("Analyze sample visits"):
-        texts = [r["text"] for r in read_jsonl(CORPUS)[:n]]
-    if texts:
-        parser = get_parser(backend)
-        with st.spinner(f"Analyzing {len(texts)} notes..."):
-            preds = parser.predict_batch(texts)
-            recs = [build_record(t, p) for t, p in zip(texts, preds)]
-        df = pd.DataFrame([to_row(r) for r in recs])
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Visits", len(df))
-        c2.metric("High risk", int((df["risk"] == "high").sum()))
-        c3.metric("Open action items", int(df["n_actions"].sum()))
-        counts = pd.DataFrame([{"issue": ISSUE_BY_CODE[i["code"]].display, "group": i["group"]}
-                               for r in recs for i in r["issues"]])
-        if not counts.empty:
-            st.altair_chart(alt.Chart(counts).mark_bar().encode(
-                x=alt.X("count():Q", title="Visits with this issue"),
-                y=alt.Y("issue:N", sort="-x", title=None), color=alt.Color("group:N", title="Group"),
-            ).properties(height=320, title="Active issues across visits"), width="stretch")
-        order = {"high": 0, "medium": 1, "low": 2}
-        st.dataframe(df.sort_values("risk", key=lambda s: s.map(order)), hide_index=True, width="stretch")
-        st.download_button("Download table (.csv)", df.to_csv(index=False), "scope_portfolio.csv", "text/csv")
+            texts = df_in["note"].astype(str).tolist()[:PORTFOLIO_MAX]
+    elif st.button(f"Analyze {PORTFOLIO_MAX} sample visits"):
+        texts = [r["text"] for r in read_jsonl(CORPUS)[:PORTFOLIO_MAX]]
+    if texts and not parser:
+        st.info("Add a Gemini API key in the sidebar first.")
+    elif texts:
+        recs, bar = [], st.progress(0.0, text="Reading notes...")
+        for i, t in enumerate(texts):
+            try:
+                recs.append(cached_llm("record", t, lambda t=t: parser.analyze(t)))
+            except LLMError as e:
+                st.error(f"Stopped after {i} notes: {e}")
+                break
+            bar.progress((i + 1) / len(texts), text=f"Read {i + 1} of {len(texts)} notes")
+        if recs:
+            df = pd.DataFrame([to_row(r) for r in recs])
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Visits", len(df))
+            c2.metric("High risk", int((df["risk"] == "high").sum()))
+            c3.metric("Open action items", int(df["n_actions"].sum()))
+            counts = pd.DataFrame([{"issue": i["display"], "group": i["group"]} for r in recs for i in r["issues"]])
+            if not counts.empty:
+                st.altair_chart(alt.Chart(counts).mark_bar().encode(
+                    x=alt.X("count():Q", title="Visits with this issue"),
+                    y=alt.Y("issue:N", sort="-x", title=None),
+                    color=alt.Color("group:N", title="Group", scale=alt.Scale(domain=ISSUE_GROUPS)),
+                ).properties(height=300, title="Active issues across visits"), width="stretch")
+            order = {"high": 0, "medium": 1, "low": 2}
+            st.dataframe(df.sort_values("risk", key=lambda s: s.map(order)), hide_index=True, width="stretch")
+            st.download_button("Download table (.csv)", df.to_csv(index=False), "scope_portfolio.csv", "text/csv")

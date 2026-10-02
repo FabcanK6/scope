@@ -11,3 +11,5 @@ data/*.jsonl
 !data/corpus.jsonl
 models/
 reports/
+# Streamlit secrets (API keys) never go to GitHub
+.streamlit/secrets.toml

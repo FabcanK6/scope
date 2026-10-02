@@ -94,6 +94,28 @@ class BertParser:
 _INSTRUCTION_RE = re.compile(r"\b(?:to|will|should|must|needs? to|please|action|f/u|follow[- ]up)\b", re.I)
 
 
+RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+
+def review_reasons(bert_pred: dict, rules_pred: dict) -> list[str]:
+    """Reasons to send a note to a human instead of trusting the output.
+
+    The two parsers fail in different ways, so strong disagreement between them
+    is a cheap, explainable signal that the note is unlike the training data.
+    """
+    reasons = []
+    conf = max(bert_pred["risk_probs"].values()) if bert_pred.get("risk_probs") else 1.0
+    if conf < 0.6:
+        reasons.append(f"The model is unsure about the risk level ({conf:.0%}).")
+    gap = abs(RISK_ORDER[bert_pred["risk"]] - RISK_ORDER[rules_pred["risk"]])
+    if gap == 2:
+        reasons.append(f"The model says {bert_pred['risk']} risk but the keyword rules say {rules_pred['risk']}.")
+    diff = set(bert_pred["issues"]) ^ set(rules_pred["issues"])
+    if len(diff) >= 3:
+        reasons.append(f"The model and the keyword rules disagree on {len(diff)} issue types.")
+    return reasons
+
+
 class HybridParser:
     """BERT for what needs understanding, rules for what follows a format.
 
@@ -136,7 +158,8 @@ class HybridParser:
                     continue  # e.g. "going through the clinic charts" is narrative, not a follow-up
                 tags[sp.start:sp.end] = b["tags"][sp.start:sp.end]
             toks = r["tokens"]
-            pred = {**b, "tags": tags, "spans": bio_to_spans(toks, tags, text), "backend": self.name}
+            pred = {**b, "tags": tags, "spans": bio_to_spans(toks, tags, text), "backend": self.name,
+                    "review_reasons": review_reasons(b, r)}
             out.append(_with_actions(text, pred))
         return out
 
