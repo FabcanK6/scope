@@ -18,6 +18,7 @@ import difflib
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -29,20 +30,38 @@ STATUSES = ["active", "resolved_on_site", "no_issue"]
 SEVERITIES = ["minor", "major", "critical"]
 
 
+BUSY_MESSAGE = ("Gemini is busy right now (Google's free tier is under high demand). "
+                "Please try again in a minute.")
+
+
 class LLMError(Exception):
     """A user-facing error message (quota reached, bad key, network problem...)."""
+
+
+class ModelNotFound(LLMError):
+    """This model can't be used with this key; try another one."""
+
+
+class ModelBusy(LLMError):
+    """Temporary overload (HTTP 500/502/503/504 or a timeout); retry, then try another model."""
 
 
 # ---------------------------------------------------------------------------
 # Gemini REST client (standard library only)
 # ---------------------------------------------------------------------------
 class GeminiClient:
+    retry_delays = (2.0, 5.0)  # waits before the 2nd and 3rd attempt on a busy model
+    max_models = 4  # how many models to try before giving up
+
     def __init__(self, api_key: str, model: str | None = None, timeout: int = 60):
         if not api_key:
             raise LLMError("No Gemini API key configured.")
         self.api_key = api_key
-        self.model = model or DEFAULT_MODEL or None
+        self.preferred = model or DEFAULT_MODEL or None  # pinned via GEMINI_MODEL, tried first
+        self.model = self.preferred  # the last model that answered
         self.timeout = timeout
+        self._listed: list[str] | None = None
+        self._sleep = time.sleep
 
     # -- transport (patched in tests) -------------------------------------
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -64,8 +83,14 @@ class GeminiClient:
                 raise LLMError("The Gemini API key was rejected. Check the key in the app settings.") from e
             if e.code == 404:
                 raise ModelNotFound(detail) from e
-            raise LLMError(f"Gemini API error {e.code}: {detail}") from e
+            if e.code in (500, 502, 503, 504):
+                raise ModelBusy(f"HTTP {e.code}") from e
+            raise LLMError(f"Gemini API error {e.code}: {_message(detail)}") from e
+        except TimeoutError as e:
+            raise ModelBusy("timeout") from e
         except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError):
+                raise ModelBusy("timeout") from e
             raise LLMError(f"Could not reach the Gemini API ({e.reason}).") from e
 
     # -- model selection --------------------------------------------------
@@ -86,9 +111,14 @@ class GeminiClient:
         return sorted(names, key=key, reverse=True)
 
     def candidates(self) -> list[str]:
-        if self.model:
-            return [self.model]
-        return self.list_models() or ["gemini-flash-latest"]
+        """Last working model, then the pinned one, then the newest available flash models."""
+        if self._listed is None:
+            try:
+                self._listed = self.list_models()
+            except ModelBusy:
+                self._listed = []
+        order = [self.model, self.preferred, *self._listed, "gemini-flash-latest"]
+        return list(dict.fromkeys(m for m in order if m))[: self.max_models]
 
     # -- generation -------------------------------------------------------
     def generate(self, system: str, prompt: str, schema: dict | None = None, temperature: float = 0.1) -> str:
@@ -102,8 +132,8 @@ class GeminiClient:
         last = None
         for model in self.candidates():
             try:
-                data = self._request("POST", f"models/{model}:generateContent", body)
-            except ModelNotFound as e:
+                data = self._call_with_retry(f"models/{model}:generateContent", body)
+            except (ModelNotFound, ModelBusy) as e:
                 last = e
                 continue
             self.model = model  # remember the model that worked
@@ -112,7 +142,19 @@ class GeminiClient:
             except (KeyError, IndexError) as e:
                 reason = data.get("promptFeedback", {}).get("blockReason") or "empty response"
                 raise LLMError(f"Gemini returned no text ({reason}).") from e
+        if isinstance(last, ModelBusy):
+            raise LLMError(BUSY_MESSAGE)
         raise LLMError(f"No usable Gemini model found ({last}).")
+
+    def _call_with_retry(self, path: str, body: dict) -> dict:
+        for delay in (*self.retry_delays, None):
+            try:
+                return self._request("POST", path, body)
+            except ModelBusy:
+                if delay is None:
+                    raise
+                self._sleep(delay)
+        raise AssertionError("unreachable")
 
     def generate_json(self, system: str, prompt: str, schema: dict) -> dict:
         raw = self.generate(system, prompt, schema)
@@ -123,10 +165,6 @@ class GeminiClient:
             if m:
                 return json.loads(m.group(0))
             raise LLMError("Gemini did not return valid JSON.") from None
-
-
-class ModelNotFound(LLMError):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +184,14 @@ RUBRIC_TEXT = """Severity rubric (from an experienced clinical research associat
 Status: "active" = a problem that still exists after the visit. "resolved_on_site" = it was corrected and verified
 during the visit. "no_issue" = the topic is mentioned only to confirm it is fine. Critical findings stay "active" even
 when a CAPA is in place."""
+
+def _message(detail: str) -> str:
+    """The human-readable part of a Gemini error body (falls back to the raw text)."""
+    try:
+        return json.loads(detail)["error"]["message"]
+    except (ValueError, KeyError, TypeError):
+        return detail
+
 
 def _norm(s: str) -> str:
     s = s.replace("’", "'").replace("‘", "'").replace("“", '"').replace("”", '"')

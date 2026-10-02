@@ -2,7 +2,7 @@
 import json
 import unittest
 
-from scope.llm import GeminiClient, LLMError, ModelNotFound, draft_followup, verify_quote
+from scope.llm import BUSY_MESSAGE, GeminiClient, LLMError, ModelBusy, ModelNotFound, draft_followup, verify_quote
 
 NOTE = ("Visit Type: Directed/For-Cause Monitoring Visit\nDate: September 18, 2026\n"
         "The subject was hospitalized on August 30, 2026, but the site did not notify the Sponsor until "
@@ -21,6 +21,8 @@ class FakeClient(GeminiClient):
         self.replies = list(replies)
         self.models = list(models)
         self.calls = []
+        self.waits = []
+        self._sleep = self.waits.append  # no real waiting in tests
 
     def _request(self, method, path, body=None):
         self.calls.append((method, path))
@@ -77,6 +79,50 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(client.model, "gemini-8-flash")
         with self.assertRaises(LLMError):
             LLMParser(FakeClient([LLMError("The free Gemini quota is used up for now.")])).analyze(NOTE)
+
+    def test_busy_retry_then_next_model(self):
+        from scope.engine import LLMParser
+
+        empty = {"visit": {}, "findings": [], "actions": [], "summary": ""}
+        # first model busy 3 times (1 try + 2 retries), second model answers
+        client = FakeClient([ModelBusy("HTTP 503")] * 3 + [fake_response(empty)],
+                            models=("gemini-9-flash", "gemini-8-flash"))
+        LLMParser(client).analyze(NOTE)
+        self.assertEqual(client.model, "gemini-8-flash")
+        self.assertEqual(client.waits, [2.0, 5.0])
+        # busy once, then fine on the same model
+        client = FakeClient([ModelBusy("HTTP 503"), fake_response(empty)])
+        LLMParser(client).analyze(NOTE)
+        self.assertEqual(client.model, "gemini-9-flash")
+        # everything busy -> one friendly message, no raw JSON
+        client = FakeClient([ModelBusy("HTTP 503")] * 20, models=("gemini-9-flash", "gemini-8-flash"))
+        with self.assertRaises(LLMError) as ctx:
+            LLMParser(client).analyze(NOTE)
+        self.assertEqual(str(ctx.exception), BUSY_MESSAGE)
+
+    def test_pinned_model_falls_back_when_busy(self):
+        client = FakeClient([ModelBusy("HTTP 503")] * 3 + [fake_response("ok")], models=("gemini-8-flash",))
+        client.preferred = client.model = "gemini-9-flash"
+        self.assertEqual(client.candidates()[:2], ["gemini-9-flash", "gemini-8-flash"])
+        self.assertEqual(client.generate("s", "p"), "ok")
+        self.assertEqual(client.model, "gemini-8-flash")
+
+    def test_http_error_mapping(self):
+        import io
+        import urllib.error
+        from unittest import mock
+
+        def raise_http(code, body):
+            err = urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(body.encode()))
+            return mock.patch("urllib.request.urlopen", side_effect=err)
+
+        client = GeminiClient("k", model="gemini-9-flash")
+        body = '{"error": {"code": 503, "message": "This model is currently experiencing high demand."}}'
+        with raise_http(503, body), self.assertRaises(ModelBusy):
+            client._request("POST", "models/x:generateContent", {})
+        with raise_http(400, '{"error": {"message": "Bad field."}}'), self.assertRaises(LLMError) as ctx:
+            client._request("POST", "models/x:generateContent", {})
+        self.assertEqual(str(ctx.exception), "Gemini API error 400: Bad field.")
 
     def test_letter(self):
         from scope.predict import RuleBasedParser

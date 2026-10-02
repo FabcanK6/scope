@@ -81,8 +81,8 @@ def cached_llm(kind: str, text: str, fn):
     used = st.session_state.get("llm_calls", 0)
     if used >= MAX_NEW_CALLS:
         raise LLMError(f"This session has used its {MAX_NEW_CALLS} new LLM requests. Reload the page later.")
+    value = fn()  # failed requests (busy, quota) don't count against the session
     st.session_state["llm_calls"] = used + 1
-    value = fn()
     cache[key] = (time.time(), value)
     return value
 

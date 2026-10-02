@@ -59,7 +59,7 @@ Each active finding scores 1 (minor), 3 (major) or 6 (critical): any critical fi
 ## Setup (free Gemini API key)
 
 1. Create a free key at [aistudio.google.com](https://aistudio.google.com) (Get API key → Create API key).
-2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model and moves on if one is not available on the free tier.
+2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model. If a model is not available on the free tier, or is overloaded (HTTP 503), SCOPE retries briefly and then moves on to the next model, so a busy model does not stop the app.
 3. Locally: `export GEMINI_API_KEY=...`, then `streamlit run app/streamlit_app.py` or `python -m scope.llm --file note.txt --letter`.
 
 Visitors can also paste their own key in the app's sidebar; it stays in their browser session. Free-tier requests may be used by the provider, so only send fictional or de-identified notes. A deployment on real study data would need an enterprise LLM agreement covering PHI.
