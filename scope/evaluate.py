@@ -45,20 +45,23 @@ def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--data", nargs="+", default=DEFAULT_SETS)
     ap.add_argument("--model", default="models/scope-bert")
-    ap.add_argument("--backend", choices=["auto", "bert", "rules"], default="auto")
+    ap.add_argument("--backend", choices=["auto", "hybrid", "bert", "rules"], default="auto",
+                    help="auto = plain BERT if a checkpoint exists, else rules")
     ap.add_argument("--report", default=None, help="write the full metrics to this JSON file")
     ap.add_argument("--errors", type=int, default=0, help="print this many misclassified notes per set")
     ap.add_argument("--quiet", action="store_true", help="only print the summary table")
     args = ap.parse_args(argv)
 
-    from scope.predict import BertParser, RuleBasedParser, load_parser
+    from scope.predict import BertParser, HybridParser, RuleBasedParser, load_parser
 
     if args.backend == "rules":
         parser = RuleBasedParser()
     elif args.backend == "bert":
         parser = BertParser.from_dir(args.model)
+    elif args.backend == "hybrid":
+        parser = HybridParser(BertParser.from_dir(args.model))
     else:
-        parser = load_parser(args.model)
+        parser = load_parser(args.model, backend="bert")
     print(f"parser: {parser.name}")
 
     reports, table = {}, []

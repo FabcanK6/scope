@@ -1,7 +1,7 @@
 """Inference: site-visit note -> structured visit record.
 
     from scope.predict import load_parser
-    parser = load_parser("models/scope-bert")      # or load_parser(None) for the rule baseline
+    parser = load_parser("models/scope-bert")      # hybrid; backend="bert" or "rules" for the others
     record = parser.analyze(note_text)
 """
 
@@ -90,8 +90,58 @@ class BertParser:
         return [build_record(t, p) for t, p in zip(texts, self.predict_batch(texts))]
 
 
-def load_parser(model_dir: str | Path | None = "models/scope-bert", device: str = "auto"):
-    """Return the BERT parser when a checkpoint exists, otherwise the rule-based parser."""
-    if model_dir and (Path(model_dir) / "scope_model.pt").exists():
-        return BertParser.from_dir(model_dir, device)
+class HybridParser:
+    """BERT for what needs understanding, rules for what follows a format.
+
+    Evaluation showed a clear split: the fine-tuned model is far better at the
+    judgement calls (risk level, which issues are active, negations), while the
+    regular expressions are better at visit metadata and action-item lines in
+    formats the model never saw (new date formats, new note layouts). So:
+
+    * risk and issue flags come from BERT
+    * metadata and action spans come from the rules
+    * in any sentence where the rules found no action item, BERT's action spans are used
+    """
+
+    name = "hybrid"
+
+    def __init__(self, bert: BertParser, rules: RuleBasedParser | None = None):
+        self.bert = bert
+        self.rules = rules or RuleBasedParser()
+
+    def predict(self, text: str) -> dict:
+        return self.predict_batch([text])[0]
+
+    def predict_batch(self, texts: list[str], batch_size: int = 16) -> list[dict]:
+        from scope.text import sentences
+
+        out = []
+        for text, b, r in zip(texts, self.bert.predict_batch(texts, batch_size), self.rules.predict_batch(texts)):
+            tags = list(r["tags"])
+            rule_action_sents = {i for i, (s, e) in enumerate(sentences(text))
+                                 if any(sp.label == "ACTION" and s <= sp.char_start < e for sp in r["spans"])}
+            for sp in b["spans"]:
+                if sp.label not in ("ACTION", "OWNER", "DUE"):
+                    continue
+                sent = next((i for i, (s, e) in enumerate(sentences(text)) if s <= sp.char_start < e), None)
+                if sent in rule_action_sents or any(t != "O" for t in tags[sp.start:sp.end]):
+                    continue
+                tags[sp.start:sp.end] = b["tags"][sp.start:sp.end]
+            toks = r["tokens"]
+            pred = {**b, "tags": tags, "spans": bio_to_spans(toks, tags, text), "backend": self.name}
+            out.append(_with_actions(text, pred))
+        return out
+
+    def analyze(self, text: str) -> dict:
+        return build_record(text, self.predict(text))
+
+
+def load_parser(model_dir: str | Path | None = "models/scope-bert", device: str = "auto", backend: str = "hybrid"):
+    """Return the requested parser. Falls back to the rule-based parser when no checkpoint exists.
+
+    ``backend``: "hybrid" (default; BERT for risk and issues, rules for metadata), "bert" or "rules".
+    """
+    if backend != "rules" and model_dir and (Path(model_dir) / "scope_model.pt").exists():
+        bert = BertParser.from_dir(model_dir, device)
+        return HybridParser(bert) if backend == "hybrid" else bert
     return RuleBasedParser()

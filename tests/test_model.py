@@ -50,14 +50,19 @@ class TestScopeModel(unittest.TestCase):
 
     def test_save_load_and_analyze(self):
         from scope.model import ScopeModel
-        from scope.predict import BertParser, load_parser
+        from scope.predict import BertParser, HybridParser, load_parser
 
         d = f"{self.tmp.name}/ckpt"
         self.model.save(d, self.tokenizer, base_model="tiny-test", max_length=512)
         _model, _tok, cfg = ScopeModel.load(d)
         self.assertEqual(cfg["base_model"], "tiny-test")
-        parser = load_parser(d, device="cpu")
+        parser = load_parser(d, device="cpu", backend="bert")
         self.assertIsInstance(parser, BertParser)
+        hybrid = load_parser(d, device="cpu")
+        self.assertIsInstance(hybrid, HybridParser)
+        hrec = hybrid.analyze(self.rows[0]["text"])
+        self.assertEqual(hrec["backend"], "hybrid")
+        self.assertEqual(hrec["risk"]["level"], parser.analyze(self.rows[0]["text"])["risk"]["level"])
         rec = parser.analyze(self.rows[0]["text"])
         self.assertIn(rec["risk"]["level"], ["low", "medium", "high"])
         self.assertAlmostEqual(sum(rec["risk"]["probabilities"].values()), 1.0, places=3)

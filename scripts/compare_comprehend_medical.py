@@ -79,7 +79,7 @@ def main() -> None:
     import boto3
 
     client = boto3.client("comprehendmedical", region_name=args.region)
-    parser = load_parser(args.model)
+    parser = load_parser(args.model, backend="hybrid")
     print(f"SCOPE parser: {parser.name}")
 
     counts = {"cm_dates": [0, 0, 0], "scope_dates": [0, 0, 0], "cm_names": [0, 0, 0], "scope_names": [0, 0, 0]}

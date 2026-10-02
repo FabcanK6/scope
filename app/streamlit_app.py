@@ -54,7 +54,7 @@ def ensure_model() -> bool:
 
 @st.cache_resource
 def get_parser(backend: str):
-    return RuleBasedParser() if backend == "rules" else load_parser(MODEL_DIR)
+    return RuleBasedParser() if backend == "rules" else load_parser(MODEL_DIR, backend=backend)
 
 
 @st.cache_resource(show_spinner="Building the similar-visit index (first run only)...")
@@ -105,9 +105,10 @@ st.caption("Site Communication & Oversight Processing Engine · turns free-text 
 
 with st.sidebar:
     has_model = ensure_model()
-    backend = st.radio("Parser", ["bert", "rules"], index=0 if has_model else 1,
-                       help="'bert' is the fine-tuned model; 'rules' is the regex + keyword baseline.")
-    if backend == "bert" and not has_model:
+    backend = st.radio("Parser", ["hybrid", "bert", "rules"], index=0 if has_model else 2,
+                       help="'hybrid' (recommended): BERT for risk and issues, rules for dates, site and counts. "
+                            "'bert': the fine-tuned model alone. 'rules': the regex + keyword baseline.")
+    if backend != "rules" and not has_model:
         st.warning(f"No checkpoint at `{MODEL_DIR}`, so the rule-based parser is used instead.")
     st.markdown("**Example notes**")
     for label, text in examples().items():

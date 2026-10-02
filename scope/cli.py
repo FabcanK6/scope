@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("note", nargs="?", help="note text (or use --file, or pipe text in)")
     ap.add_argument("--file", help="read the note from this file")
     ap.add_argument("--model", default="models/scope-bert")
-    ap.add_argument("--backend", choices=["auto", "rules"], default="auto")
+    ap.add_argument("--backend", choices=["hybrid", "bert", "rules"], default="hybrid")
     ap.add_argument("--json", action="store_true", help="print the full visit record as JSON")
     args = ap.parse_args(argv)
 
@@ -31,10 +31,10 @@ def main(argv: list[str] | None = None) -> None:
     if not text.strip():
         ap.error("no note text given")
 
-    from scope.predict import RuleBasedParser, load_parser
+    from scope.predict import load_parser
     from scope.record import audit_summary
 
-    parser = RuleBasedParser() if args.backend == "rules" else load_parser(args.model)
+    parser = load_parser(args.model, backend=args.backend)
     rec = parser.analyze(text)
     print(json.dumps(rec, indent=2) if args.json else audit_summary(rec))
 
