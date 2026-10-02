@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from scope.record import assemble_actions, build_record
@@ -90,6 +91,9 @@ class BertParser:
         return [build_record(t, p) for t, p in zip(texts, self.predict_batch(texts))]
 
 
+_INSTRUCTION_RE = re.compile(r"\b(?:to|will|should|must|needs? to|please|action|f/u|follow[- ]up)\b", re.I)
+
+
 class HybridParser:
     """BERT for what needs understanding, rules for what follows a format.
 
@@ -100,7 +104,8 @@ class HybridParser:
 
     * risk and issue flags come from BERT
     * metadata and action spans come from the rules
-    * in any sentence where the rules found no action item, BERT's action spans are used
+    * in any sentence where the rules found no action item, BERT's action spans are used,
+      but only if the sentence reads like an instruction ("X to ...", "will", "should", "need to")
     """
 
     name = "hybrid"
@@ -120,12 +125,15 @@ class HybridParser:
             tags = list(r["tags"])
             rule_action_sents = {i for i, (s, e) in enumerate(sentences(text))
                                  if any(sp.label == "ACTION" and s <= sp.char_start < e for sp in r["spans"])}
+            bounds = sentences(text)
             for sp in b["spans"]:
                 if sp.label not in ("ACTION", "OWNER", "DUE"):
                     continue
-                sent = next((i for i, (s, e) in enumerate(sentences(text)) if s <= sp.char_start < e), None)
-                if sent in rule_action_sents or any(t != "O" for t in tags[sp.start:sp.end]):
+                sent = next((i for i, (s, e) in enumerate(bounds) if s <= sp.char_start < e), None)
+                if sent is None or sent in rule_action_sents or any(t != "O" for t in tags[sp.start:sp.end]):
                     continue
+                if not _INSTRUCTION_RE.search(text[bounds[sent][0]:bounds[sent][1]]):
+                    continue  # e.g. "going through the clinic charts" is narrative, not a follow-up
                 tags[sp.start:sp.end] = b["tags"][sp.start:sp.end]
             toks = r["tokens"]
             pred = {**b, "tags": tags, "spans": bio_to_spans(toks, tags, text), "backend": self.name}

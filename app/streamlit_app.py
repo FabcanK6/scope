@@ -158,7 +158,9 @@ with tab_one:
                         y=alt.Y("risk:N", sort=["low", "medium", "high"]),
                         color=alt.Color("risk:N", scale=alt.Scale(domain=list(RISK_COLORS),
                                                                   range=list(RISK_COLORS.values())), legend=None),
-                    ).properties(height=120, title="Risk probabilities (calibrated)"), width="stretch")
+                    ).properties(height=120, title="Risk probabilities"), width="stretch")
+                    st.caption("Calibrated on synthetic validation notes; on differently written notes the model "
+                               "can be more confident than it should be.")
             with right:
                 st.subheader("Visit details")
                 st.markdown(
