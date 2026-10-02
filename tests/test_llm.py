@@ -124,6 +124,29 @@ class TestLLM(unittest.TestCase):
             client._request("POST", "models/x:generateContent", {})
         self.assertEqual(str(ctx.exception), "Gemini API error 400: Bad field.")
 
+    def test_messy_visit_values(self):
+        from scope.engine import LLMParser
+
+        note = ("Monitor: Hannah Price, RN\nVisit Type: Interim Monitoring Visit (IMV)\nDate: October 14, 2025\n"
+                "Site 231: 5 screened, 2 randomized. All consents verified.")
+        answer = {"visit": {"visit_type": "Interim Monitoring Visit (IMV) - wait, rule: drop the brackets",
+                            "visit_date": None, "screened": "5", "enrolled": "2"},
+                  "findings": [], "actions": [], "summary": ""}
+        rec = LLMParser(FakeClient([fake_response(answer)])).analyze(note)
+        self.assertEqual(rec["visit"]["visit_type"]["code"], "IMV")  # clean piece of a messy value
+        self.assertEqual(rec["visit"]["visit_date"]["iso"], "2025-10-14")  # from the labelled header line
+        self.assertEqual((rec["visit"]["screened"], rec["visit"]["enrolled"]), (5, 2))  # not the "2" in "231"
+        self.assertFalse(rec["review"]["needed"])
+        self.assertEqual(rec["llm_output"]["visit"]["screened"], "5")
+
+    def test_prompt_examples_are_not_test_notes(self):
+        from scope.data.handwritten import load_handwritten, load_realistic
+        from scope.engine import SYSTEM
+
+        for r in load_handwritten() + load_realistic():
+            first = " ".join(r["text"].split())[:80]
+            self.assertNotIn(first, " ".join(SYSTEM.split()), r["id"])
+
     def test_letter(self):
         from scope.predict import RuleBasedParser
 

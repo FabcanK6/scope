@@ -161,6 +161,7 @@ def build_record(text: str, pred: dict) -> dict:
         "points": pred.get("points"),
         "backend": pred.get("backend"),
         "model": pred.get("model"),
+        "llm_output": pred.get("llm_output"),
     }
 
 

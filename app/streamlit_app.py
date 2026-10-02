@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from scope.data.generate import read_jsonl  # noqa: E402
 from scope.data.handwritten import load_handwritten, load_realistic  # noqa: E402
-from scope.engine import LLMParser  # noqa: E402
+from scope.engine import SYSTEM, LLMParser  # noqa: E402
 from scope.llm import GeminiClient, LLMError, draft_followup, get_api_key  # noqa: E402
 from scope.record import audit_summary, to_row  # noqa: E402
 from scope.schema import ISSUE_BY_CODE, ISSUE_GROUPS  # noqa: E402
@@ -33,6 +33,7 @@ SEVERITY_COLORS = {"critical": "#C62828", "major": "#ED6C02", "minor": "#B8860B"
 STATUS_COLORS = {"resolved_on_site": "#1565C0", "no_issue": "#2E7D32"}
 MAX_NEW_CALLS = 25  # new LLM requests per browser session (cached answers are free)
 PORTFOLIO_MAX = 10
+ENGINE_VERSION = hashlib.sha256(SYSTEM.encode()).hexdigest()[:8]  # a new prompt never reuses old cached answers
 
 st.set_page_config(page_title="SCOPE - Site Visit Note Intelligence", page_icon="🩺", layout="wide")
 
@@ -70,7 +71,7 @@ def shared_cache() -> dict:
 
 def _cache_key(kind: str, text: str) -> str:
     fp = hashlib.sha256((api_key() or "").encode()).hexdigest()[:12]
-    return f"{kind}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
+    return f"{kind}:{ENGINE_VERSION}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
 def cached_llm(kind: str, text: str, fn):
@@ -184,7 +185,7 @@ with st.sidebar:
             "dosing errors are critical.")
 
 parser = get_parser()
-tab_one, tab_batch = st.tabs(["Analyze a note", "Portfolio view"])
+tab_one, tab_batch, tab_check = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check"])
 
 with tab_one:
     note = st.text_area("Site-visit note", key="note", height=230,
@@ -286,6 +287,7 @@ with tab_one:
             st.markdown(md)
             st.download_button("Download summary (.md)", md, "scope_visit_summary.md", "text/markdown")
         with t_json:
+            st.caption("SCOPE's record. `llm_output` is exactly what the LLM returned, before SCOPE checked it.")
             st.json(rec)
             st.download_button("Download record (.json)", json.dumps(rec, indent=2), "scope_visit_record.json",
                                "application/json")
@@ -330,3 +332,60 @@ with tab_batch:
             order = {"high": 0, "medium": 1, "low": 2}
             st.dataframe(df.sort_values("risk", key=lambda s: s.map(order)), hide_index=True, width="stretch")
             st.download_button("Download table (.csv)", df.to_csv(index=False), "scope_portfolio.csv", "text/csv")
+
+with tab_check:
+    st.markdown(
+        "Does SCOPE agree with an experienced CRA? Run it on notes that a CRA has already labelled (risk level and "
+        "active issues) and compare. None of these notes are in SCOPE's instructions, so it has not seen the answers.")
+
+    @st.cache_data
+    def labelled_sets() -> dict[str, list[dict]]:
+        hw = load_handwritten()
+        return {"Formal visit reports (7)": load_realistic(), "Hand-written notes 1-8": hw[:8],
+                "Hand-written notes 9-16": hw[8:16], "Hand-written notes 17-24": hw[16:24]}
+
+    sets = labelled_sets()
+    choice = st.selectbox("Labelled notes", list(sets))
+    if not parser:
+        st.info("Add a Gemini API key in the sidebar first.")
+    elif st.button("Run the check"):
+        st.session_state["check"] = choice
+    if parser and st.session_state.get("check") == choice:
+        rows, recs, bar = sets[choice], [], st.progress(0.0, text="Reading notes...")
+        for i, r in enumerate(rows):
+            try:
+                recs.append(cached_llm("record", r["text"], lambda t=r["text"]: parser.analyze(t)))
+            except LLMError as e:
+                st.error(f"Stopped after {i} notes: {e}")
+                break
+            bar.progress((i + 1) / len(rows), text=f"Read {i + 1} of {len(rows)} notes")
+        if recs:
+            def names(codes):
+                return ", ".join(ISSUE_BY_CODE[c].display for c in sorted(codes)) or "none"
+
+            table = []
+            for r, rec in zip(rows, recs):
+                got = {i["code"] for i in rec["issues"]}
+                table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
+                              "CRA risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
+                              "Risk agrees": "yes" if r["risk"] == rec["risk"]["level"] else "NO",
+                              "CRA issues": names(r["issues"]), "SCOPE issues": names(got),
+                              "Issues agree": "yes" if set(r["issues"]) == got else "partly"})
+            df = pd.DataFrame(table)
+            n = len(df)
+            high = df[df["CRA risk"] == "high"]
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Risk level agrees", f"{int((df['Risk agrees'] == 'yes').sum())} / {n}")
+            c2.metric("High-risk visits caught", f"{int((high['SCOPE risk'] == 'high').sum())} / {len(high)}"
+                      if len(high) else "none in set")
+            c3.metric("False alarms (flagged high, CRA said lower)",
+                      int(((df["SCOPE risk"] == "high") & (df["CRA risk"] != "high")).sum()))
+            st.dataframe(df, hide_index=True, width="stretch")
+            for r, rec in zip(rows, recs):
+                if r["risk"] == rec["risk"]["level"]:
+                    continue
+                with st.expander(f"{r['id']}: CRA said {r['risk']}, SCOPE said {rec['risk']['level']}"):
+                    st.text(r["text"])
+                    st.dataframe(findings_table(rec, "active"), hide_index=True, width="stretch")
+                    st.caption("Who is right? If the label looks wrong to you, tell us; if SCOPE is wrong, this "
+                               "is what the next prompt or rubric change should fix.")

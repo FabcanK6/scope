@@ -26,7 +26,7 @@ SCOPE does the first read. It is built to earn a CRA's trust rather than to impr
 ## How it works
 
 ```text
-note ─► LLM (Google Gemini): instructions + severity rubric + two worked examples
+note ─► LLM (Google Gemini): instructions + severity rubric + three worked examples
           returns JSON: visit details, every finding (topic, status, severity, quoted evidence), action items
      ─► verification (plain code): every quote, name, date and action must appear in the note, or it is dropped
      ─► rubric (plain code): risk = high / medium / low from the verified active findings
@@ -35,7 +35,7 @@ note ─► LLM (Google Gemini): instructions + severity rubric + two worked exa
 
 - **The LLM reads; code decides.** The model's job is reading comprehension: is this sentence a problem, something fixed on site, or a confirmation that all is well? The risk level is never the model's opinion. It is computed from the verified findings with a fixed rubric, so the same findings always give the same answer and the rubric can be changed in one place (`scope/llm.py`).
 - **Nothing without evidence.** Every finding must quote the note. SCOPE checks each quote (ignoring case and spacing) and drops findings whose quote is not there, as well as names, dates and action items that do not appear in the note. Anything dropped is listed so the reviewer can see it.
-- **Few-shot, not fine-tuned.** The prompt contains the rubric and two worked examples written in a real CRA's style: a clean visit where a problem was fixed on site, and a late SAE. Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model.
+- **Few-shot, not fine-tuned.** The prompt contains the rubric and three worked examples in three note styles (a formal report with problems fixed on site and one open major issue, bullet notes with a critical finding, and a short e-mail with only a minor issue). The examples were written for the prompt and are not in any test set or in the app's example notes, so the demo and the evaluation are not answered in advance (a unit test checks this). Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model. The app's **Accuracy check** tab runs SCOPE on these labelled notes and shows where it agrees and disagrees with the CRA's labels.
 - **Free and light.** It runs on the free tier of the Gemini API through Python's standard library; the app has no ML framework to install. Answers are cached for 24 hours so repeated notes cost nothing, and each visitor is capped at 25 new requests.
 
 ### Why an LLM and not the fine-tuned model
@@ -70,7 +70,7 @@ Visitors can also paste their own key in the app's sidebar; it stays in their br
 GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
 ```
 
-Test sets: **realistic** (7 long, formal notes in the style of real CRA reports, provided by an experienced CRA; two of them are the prompt's worked examples and are excluded) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the prompt, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
+Test sets: **realistic** (7 long, formal notes in the style of real CRA reports, provided by an experienced CRA) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the rubric, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
 
 ### v1 training data
 

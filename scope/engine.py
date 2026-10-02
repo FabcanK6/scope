@@ -18,6 +18,7 @@ import time
 
 from scope.llm import RUBRIC_TEXT, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
 from scope.record import build_record, normalize_date
+from scope.rules import RuleParser
 from scope.schema import ISSUE_BY_CODE, ISSUE_CODES
 from scope.text import bio_to_spans, char_spans_to_bio, sentences, tokenize
 
@@ -44,58 +45,88 @@ EXTRACT_SCHEMA = {
 
 ISSUE_LIST = "\n".join(f"- {c}: {ISSUE_BY_CODE[c].display} ({ISSUE_BY_CODE[c].group})" for c in ISSUE_CODES)
 
-EXAMPLE_1 = """Monitor: Hannah Price, RN, CCRA
+# Worked examples for the prompt. They are written for the prompt only and do not appear in any test set
+# or in the app's example notes, so evaluation and the demo buttons are fair.
+EXAMPLE_1 = """Site: 231 - Lakeview Clinical Research
+CRA: Tomas Ferreira, CCRA
 Visit Type: Interim Monitoring Visit (IMV)
-Date: October 14, 2025
-Notes:
-Conducted a 100% source data verification (SDV) for Subject 004-12 and 004-15. Subject 004-12's informed consent form (ICF) was properly signed and dated prior to any protocol-specified procedures. However, a review of the concomitant medications log for Subject 004-15 revealed that the patient was prescribed Metoprolol by their primary care physician on September 3, 2025. This medication was not updated in the Electronic Case Report Form (eCRF). The Study Coordinator (SC) was retrained on the importance of real-time concomitant medication updates. The SC corrected the log during the visit, and I verified the entry against the source medical records. Investigational Product (IP) accountability was performed; the current inventory matches the interactive response technology (IRT) system logs exactly. No temperature excursions were noted on the digital data logger for the ambient storage closet."""  # noqa: E501
+Date of Visit: 12-Mar-2026
+Screened: 5 / Randomized: 2 (target: 8 by end of March)
+Observations:
+Reviewed source documents for Subjects 231-003 through 231-006. All four subjects were re-consented on ICF version 4.0 within the timeframe required by the IRB. The delegation of authority log was missing the start date for the new Sub-Investigator; the coordinator added the date and the PI initialed the entry while I was on site. Two data queries from the previous visit were answered and closed during the visit. Dispensing records in the pharmacy binder reconcile with the returned kits. Enrollment remains well behind target. PI to submit an enrollment recovery plan to the Sponsor by April 3, 2026."""  # noqa: E501
 
 ANSWER_1 = {
-    "visit": {"visit_type": "Interim Monitoring Visit", "visit_date": "October 14, 2025", "site": None,
-              "monitor": "Hannah Price", "pi": None, "screened": None, "enrolled": None},
+    "visit": {"visit_type": "Interim Monitoring Visit (IMV)", "visit_date": "12-Mar-2026",
+              "site": "231 - Lakeview Clinical Research", "monitor": "Tomas Ferreira", "pi": None,
+              "screened": "5", "enrolled": "2"},
     "findings": [
-        {"issue": "SDV_BACKLOG", "status": "no_issue", "severity": "minor",
-         "evidence": "Conducted a 100% source data verification (SDV) for Subject 004-12 and 004-15.",
-         "explanation": "SDV was completed for the subjects reviewed."},
         {"issue": "CONSENT", "status": "no_issue", "severity": "minor",
-         "evidence": "Subject 004-12's informed consent form (ICF) was properly signed and dated prior to any "
-                     "protocol-specified procedures.", "explanation": "Consent was done correctly."},
-        {"issue": "DATA_ENTRY_BACKLOG", "status": "resolved_on_site", "severity": "minor",
-         "evidence": "The SC corrected the log during the visit, and I verified the entry against the source "
-                     "medical records.",
-         "explanation": "A missing concomitant medication entry was fixed and verified during the visit."},
+         "evidence": "All four subjects were re-consented on ICF version 4.0 within the timeframe required by the IRB.",
+         "explanation": "Re-consent was done on time."},
+        {"issue": "STAFF_TURNOVER", "status": "resolved_on_site", "severity": "minor",
+         "evidence": "the coordinator added the date and the PI initialed the entry while I was on site",
+         "explanation": "A missing delegation log date was fixed during the visit."},
+        {"issue": "QUERY_AGING", "status": "resolved_on_site", "severity": "minor",
+         "evidence": "Two data queries from the previous visit were answered and closed during the visit.",
+         "explanation": "Open queries were closed on site."},
         {"issue": "IP_ACCOUNTABILITY", "status": "no_issue", "severity": "minor",
-         "evidence": "the current inventory matches the interactive response technology (IRT) system logs exactly",
+         "evidence": "Dispensing records in the pharmacy binder reconcile with the returned kits.",
          "explanation": "Drug accountability reconciles."},
-        {"issue": "TEMP_EXCURSION", "status": "no_issue", "severity": "minor",
-         "evidence": "No temperature excursions were noted on the digital data logger for the ambient storage "
-                     "closet.", "explanation": "Storage temperatures were fine."},
+        {"issue": "ENROLLMENT_LAG", "status": "active", "severity": "major",
+         "evidence": "Enrollment remains well behind target.",
+         "explanation": "2 randomized against a target of 8; enrollment far behind target is major."},
     ],
-    "actions": [],
-    "summary": "Routine interim visit with no open problems. A concomitant medication missing from the eCRF was "
-               "corrected and verified on site, and the coordinator was retrained.",
+    "actions": [{"owner": "PI", "action": "submit an enrollment recovery plan to the Sponsor",
+                 "due": "April 3, 2026"}],
+    "summary": "Interim visit with one open problem: enrollment is well behind target (2 of 8), and the PI owes a "
+               "recovery plan by April 3. A delegation log gap and two old queries were fixed on site.",
 }
 
-EXAMPLE_2 = """Monitor: Rachel Moore, CCRC
-Visit Type: Directed/For-Cause Monitoring Visit
-Date: September 18, 2026
-Notes:
-This unscheduled visit was triggered due to a delay in the site reporting a Serious Adverse Event (SAE) for Subject 002-44.
-The subject was hospitalized for acute cholecystitis on August 30, 2026, but the site did not notify the Sponsor until September 12, 2026, violating the mandatory 24-hour protocol reporting window. I met face-to-face with the PI to conduct a root-cause analysis.
-I retrained both the PI and the primary SC on SAE definition and reporting timelines. The site has implemented a Corrective and Preventive Action (CAPA) plan. Site to confirm CAPA effectiveness by October 15, 2026."""  # noqa: E501
+EXAMPLE_2 = """IMV - Site 408 - 09/22/2026 - CRA: Priya Nair
+- Site manager refused to give me read access to the hospital EMR for Subject 408-011 (says new hospital policy). Could not verify the Week 8 visit or any of the AE source for this subject.
+- Pharmacy temp logs reviewed through 21-Sep, all within range.
+- 3 queries open > 30 days on the Week 4 labs page.
+- Follow-up: PI to arrange EMR access for the monitor before the next visit on 10/20/2026. Escalated to the Sponsor study manager today."""  # noqa: E501
 
 ANSWER_2 = {
-    "visit": {"visit_type": "Directed/For-Cause Monitoring Visit", "visit_date": "September 18, 2026", "site": None,
-              "monitor": "Rachel Moore", "pi": None, "screened": None, "enrolled": None},
+    "visit": {"visit_type": "IMV", "visit_date": "09/22/2026", "site": "Site 408", "monitor": "Priya Nair",
+              "pi": None, "screened": None, "enrolled": None},
     "findings": [
-        {"issue": "SAE_REPORTING", "status": "active", "severity": "critical",
-         "evidence": "the site did not notify the Sponsor until September 12, 2026, violating the mandatory "
-                     "24-hour protocol reporting window",
-         "explanation": "An SAE was reported 13 days late; late SAE reporting is critical even with a CAPA."},
+        {"issue": "SDV_BACKLOG", "status": "active", "severity": "critical",
+         "evidence": "Site manager refused to give me read access to the hospital EMR for Subject 408-011",
+         "explanation": "The site refused access to source documents, so this subject's data cannot be verified."},
+        {"issue": "TEMP_EXCURSION", "status": "no_issue", "severity": "minor",
+         "evidence": "Pharmacy temp logs reviewed through 21-Sep, all within range.",
+         "explanation": "Storage temperatures were fine."},
+        {"issue": "QUERY_AGING", "status": "active", "severity": "minor",
+         "evidence": "3 queries open > 30 days on the Week 4 labs page.",
+         "explanation": "A few aging queries remain open."},
     ],
-    "actions": [{"owner": "Site", "action": "confirm CAPA effectiveness", "due": "October 15, 2026"}],
-    "summary": "For-cause visit after a hospitalization was reported to the Sponsor 13 days late (critical). "
-               "Staff were retrained and a CAPA is in place; the site must confirm it is effective.",
+    "actions": [{"owner": "PI", "action": "arrange EMR access for the monitor",
+                 "due": "before the next visit on 10/20/2026"}],
+    "summary": "The site refused the monitor access to source records for one subject (critical) and the issue has "
+               "been escalated; the PI must restore EMR access before the next visit. Three queries are aging.",
+}
+
+EXAMPLE_3 = """Hi Jen, quick recap of today's remote visit (Oct 2, 2026) for site 552. eCRF pages are current and SDV is up to date through Visit 6. One subject's Week 12 visit fell two days outside the window because of a holiday closure; the site has logged it as a minor deviation. No new AEs or SAEs since the last visit. Thanks, Marcus Lee"""  # noqa: E501
+
+ANSWER_3 = {
+    "visit": {"visit_type": "remote visit", "visit_date": "Oct 2, 2026", "site": "site 552",
+              "monitor": "Marcus Lee", "pi": None, "screened": None, "enrolled": None},
+    "findings": [
+        {"issue": "DATA_ENTRY_BACKLOG", "status": "no_issue", "severity": "minor",
+         "evidence": "eCRF pages are current", "explanation": "Data entry is up to date."},
+        {"issue": "SDV_BACKLOG", "status": "no_issue", "severity": "minor",
+         "evidence": "SDV is up to date through Visit 6", "explanation": "SDV is current."},
+        {"issue": "PROTOCOL_DEVIATION", "status": "active", "severity": "minor",
+         "evidence": "One subject's Week 12 visit fell two days outside the window because of a holiday closure",
+         "explanation": "A single out-of-window visit, already logged; minor."},
+        {"issue": "SAE_REPORTING", "status": "no_issue", "severity": "minor",
+         "evidence": "No new AEs or SAEs since the last visit.", "explanation": "No safety events to report."},
+    ],
+    "actions": [],
+    "summary": "Routine remote visit with data and SDV current. One minor out-of-window visit was logged as a "
+               "deviation; nothing else is open.",
 }
 
 SYSTEM = f"""You read clinical trial site monitoring visit notes for a clinical research associate (CRA) and turn
@@ -110,10 +141,12 @@ Rules:
 - List every topic from the issue types that the note mentions, including topics mentioned only to confirm they
   are fine (status "no_issue") and problems fixed and verified during the visit ("resolved_on_site").
 - "evidence" must be copied word for word from the note: the shortest sentence or clause that shows it.
-- Visit details (visit_type, visit_date, site, monitor, pi, screened, enrolled) must be copied word for word from
-  the note, or null if the note does not state them. visit_type without an abbreviation in brackets. monitor and pi
-  without credentials (RN, PhD, MD). screened and enrolled are the numbers only. Never use a date that is not the
-  visit date (for example a hospitalization or prescription date) as visit_date.
+- Visit details (visit_type, visit_date, site, monitor, pi, screened, enrolled) must be copied exactly as written
+  in the note, or null if the note does not state them. monitor and pi are the person's name only, without
+  credentials (RN, PhD, MD). screened and enrolled are the numbers only. Never use a date that is not the visit date
+  (for example a hospitalization or prescription date) as visit_date.
+- Every JSON value is plain data copied from the note or written as instructed. Never put notes to yourself,
+  corrections or reasoning inside a value.
 - "actions" are open follow-ups still to be done. owner, action and due are copied word for word from the note
   (due may be null). Completed tasks, things already done during the visit, and general reminders are not actions.
 - Do not invent anything. If the note does not say it, leave it out.
@@ -125,10 +158,17 @@ Answer: {json.dumps(ANSWER_1)}
 
 Example note:
 \"\"\"{EXAMPLE_2}\"\"\"
-Answer: {json.dumps(ANSWER_2)}"""
+Answer: {json.dumps(ANSWER_2)}
 
-# notes that appear in the prompt as worked examples; leave them out when evaluating
-FEW_SHOT_IDS = {"real-01", "real-05"}
+Example note:
+\"\"\"{EXAMPLE_3}\"\"\"
+Answer: {json.dumps(ANSWER_3)}"""
+
+# visit details that may be taken from a labelled header line when the model leaves them out
+HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
+
+# test notes that appear in the prompt as worked examples (none: the examples above are written for the prompt)
+FEW_SHOT_IDS: set[str] = set()
 
 
 def _find(text: str, value: str | None, start: int = 0, end: int | None = None) -> tuple[int, int] | None:
@@ -143,6 +183,44 @@ def _find(text: str, value: str | None, start: int = 0, end: int | None = None) 
     pattern = r"\s+".join(re.escape(w) for w in value.split())
     m = re.compile(pattern, re.I).search(text, start, end)
     return (m.start(), m.end()) if m else None
+
+
+_PIECES = re.compile(r"\s+(?:-|–|—|→|->|=>)\s+|\s*[;|\n]\s*|\s+\(|\)\s*")
+
+
+def _locate(text: str, value, start: int = 0) -> tuple[int, int] | None:
+    """Find a value from the model in the note. If the whole value is not there (the model added extra words),
+    accept the first clean piece of it that is."""
+    loc = _find(text, value, start) or _find(text, value)
+    if loc or not value:
+        return loc
+    for piece in _PIECES.split(str(value)):
+        if len(piece.strip(" .,:")) >= 3:
+            loc = _find(text, piece, start) or _find(text, piece)
+            if loc:
+                return loc
+    return None
+
+
+COUNT_CUES = {"screened": r"screen", "enrolled": r"enrol|randomi[sz]|consented"}
+
+
+def _count(text: str, value, key: str) -> tuple[int, int] | None:
+    """Find a subject count as a whole number, preferring the one next to 'screened' / 'enrolled' words."""
+    num = str(value or "").strip()
+    if not num:
+        return None
+    hits = [m.span() for m in re.finditer(rf"(?<![\w-]){re.escape(num)}(?![\w-])", text)]
+    for cue in re.finditer(COUNT_CUES[key], text, re.I):
+        near = [h for h in hits if abs(h[0] - cue.start()) <= 40]
+        if near:
+            return min(near, key=lambda h: abs(h[0] - cue.start()))
+    return None
+
+
+def _short(value, n: int = 60) -> str:
+    value = " ".join(str(value).split())
+    return value if len(value) <= n else value[: n - 1] + "…"
 
 
 class LLMParser:
@@ -164,14 +242,17 @@ class LLMParser:
         # visit details: keep only values that are really in the note
         v = data.get("visit") or {}
         date_at = re.search(r"(?:date of visit|visit date|date)\s*:", text, re.I)
+        header = {lab: (s0, e0) for lab, s0, e0 in RuleParser()._metadata(text, [])}
         for key, label in (("visit_type", "VISIT_TYPE"), ("visit_date", "VISIT_DATE"), ("site", "SITE"),
                            ("monitor", "MONITOR"), ("pi", "PI"), ("screened", "SCREENED"), ("enrolled", "ENROLLED")):
             start = date_at.end() if (key == "visit_date" and date_at) else 0
-            loc = _find(text, v.get(key), start) or _find(text, v.get(key))
+            loc = _count(text, v.get(key), key) if key in COUNT_CUES else _locate(text, v.get(key), start)
+            if not loc and label in HEADER_FALLBACK:
+                loc = header.get(label)  # clearly labelled header line, e.g. "Date: ..." or "Visit Type: ..."
             if loc:
                 char_spans.append((label, *loc))
             elif v.get(key):
-                problems.append(f"'{v.get(key)}' ({key.replace('_', ' ')}) is not in the note")
+                problems.append(f"'{_short(v.get(key))}' ({key.replace('_', ' ')}) is not in the note")
 
         # findings: verify the quoted evidence
         findings = []
@@ -197,7 +278,7 @@ class LLMParser:
         for a in data.get("actions") or []:
             loc = _find(text, a.get("action"))
             if not loc:
-                problems.append(f"action '{a.get('action')}' is not in the note")
+                problems.append(f"action '{_short(a.get('action'))}' is not in the note")
                 continue
             sent = next(((s, e) for s, e in bounds if s <= loc[0] < e), (0, len(text)))
             owner = _find(text, a.get("owner"), sent[0], sent[1])
@@ -224,7 +305,7 @@ class LLMParser:
             "action_items": action_items, "actions": [{k: a[k] for k in ("action", "owner", "due")}
                                                       for a in action_items],
             "summary": data.get("summary", ""), "review_reasons": problems, "backend": self.name,
-            "model": self.client.model,
+            "model": self.client.model, "llm_output": data,
         }
 
     def predict_batch(self, texts: list[str]) -> list[dict]:
