@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scope-notes"
+version = "0.1.0"
+description = "SCOPE: turn free-text clinical site-visit notes into structured, audit-ready visit records with a fine-tuned BERT model"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Fabian Msafiri" }]
+dependencies = []
+
+[project.optional-dependencies]
+model = ["torch>=2.3", "transformers>=4.40", "numpy>=1.24"]
+search = ["sentence-transformers>=3.0", "faiss-cpu>=1.8", "scikit-learn>=1.3"]
+app = ["streamlit>=1.50", "altair>=5.0", "pandas>=2.0", "huggingface_hub>=0.30"]
+aws = ["boto3>=1.34"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+[project.scripts]
+scope = "scope.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scope*"]
+
+[tool.setuptools.package-data]
+"scope.data" = ["handwritten.txt"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

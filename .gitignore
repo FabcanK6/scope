@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+.DS_Store
+# generated data and checkpoints (regenerate with the commands in README)
+data/*.jsonl
+!data/corpus.jsonl
+models/
+reports/

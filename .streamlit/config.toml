@@ -1,0 +1,6 @@
+[server]
+# Don't watch installed libraries for changes (avoids noisy torchvision import errors)
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

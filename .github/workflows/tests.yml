@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install (CPU torch)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install "transformers>=4.40" numpy scikit-learn pytest ruff
+      - name: Lint
+        run: ruff check scope tests app scripts
+      - name: Unit tests (includes tiny-BERT model tests)
+        run: pytest -q
+      - name: Rule baseline on fresh data
+        run: |
+          python -m scope.data.generate --out data --n-train 100 --n-val 50 --n-test 300 --n-unseen 300 --n-corpus 50
+          python -m scope.evaluate --backend rules --quiet

@@ -1,0 +1,215 @@
+# Hand-written evaluation notes for SCOPE.
+#
+# These were written by hand in styles the generator never produces (different
+# wording, abbreviations, run-on sentences, typos). They are a small, hard test
+# of how the models generalise beyond the template data. All content is fictional.
+#
+# Risk follows the same rubric as the generator: each active issue scores 1 (minor),
+# 3 (major) or 6 (critical); 6+ points = high, 2-5 = medium, 0-1 = low.
+#
+# Format: a block starts with "=== <id>", then "risk:" and "issues:" lines, then
+# "---", then the note. Spans are marked [[text|LABEL]].
+
+=== hw-01
+risk: high
+issues: CONSENT, QUERY_AGING
+---
+[[IMV|VISIT_TYPE]] [[Site 214|SITE]] [[02/11/2026|VISIT_DATE]] - [[R. Mensah|MONITOR]]
+pt 214-006 had screening bloods drawn the morning BEFORE he signed the ICF. coordinator says consent was "verbal" first. this is a big one
+queries are piling up, 61 open and about half are older than 2 months
+[[Coordinator|OWNER]] to [[write a note to file on the consent timing|ACTION]] by [[02/18/2026|DUE]]
+[[Site|OWNER]] to [[get the query count under 20|ACTION]] before [[next visit|DUE]]
+
+=== hw-02
+risk: low
+issues:
+---
+[[Remote monitoring visit|VISIT_TYPE]] for [[site 507|SITE]] on [[March 4, 2026|VISIT_DATE]]. Reviewed EDC remotely, everything current, zero open queries, no new AEs or SAEs. Consents for the two new subjects look fine. Enrollment going well - [[11|ENROLLED]] randomized out of [[15|SCREENED]] screened. Nothing for the site to do this time.
+
+=== hw-03
+risk: medium
+issues: TEMP_EXCURSION, REG_DOCS
+---
+Site visit report
+Site: [[Site 1290|SITE]]
+Date of visit: [[2026-01-21|VISIT_DATE]]
+Visit type: [[Interim Monitoring|VISIT_TYPE]]
+CRA: [[Helena Brooks|MONITOR]]
+
+The pharmacy fridge alarm went off over the weekend of Jan 10; logger shows it reached 11 C for roughly 6 hours. Pharmacist moved kits to quarantine and has emailed the sponsor but no decision yet. Also the updated 1572 is not in the binder.
+
+Actions
+- [[Pharmacist|OWNER]]: [[forward the logger download to the sponsor|ACTION]], [[asap|DUE]]
+- [[Reg coordinator|OWNER]]: [[file signed 1572|ACTION]] by [[30-Jan-2026|DUE]]
+
+=== hw-04
+risk: high
+issues: SAE_REPORTING, PI_OVERSIGHT
+---
+Spent most of the [[IMV|VISIT_TYPE]] at [[site 330|SITE]] ([[17-Feb-2026|VISIT_DATE]]) going through the clinic charts. Found an ED visit + overnight admission for subj 330-012 in December that never made it into EDC as an SAE. PI ([[Dr. Ward|PI]]) hadnt seen the discharge summary. He has not signed any lab reports since November either.
+[[PI|OWNER]] to [[review the admission and report as SAE|ACTION]] [[today|DUE]].
+[[PI|OWNER]] to [[sign the backlog of lab reports|ACTION]] by [[end of next week|DUE]].
+I will [[escalate to the study lead|ACTION]].
+
+=== hw-05
+risk: low
+issues: STAFF_TURNOVER
+---
+[[SIV|VISIT_TYPE]] - [[Site 811|SITE]] - [[9 Jan 2026|VISIT_DATE]]
+Attendees: [[Dr. Moreau|PI]] (PI), 2 sub-Is, CRC, pharmacist. CRA: [[D. Kim|MONITOR]]
+Protocol, IP handling and EDC training done. One sub-I missed the session and will need to complete training before doing any assessments. Reg binder complete.
+[[Sub-I Haddad|OWNER]] to [[complete protocol training|ACTION]] before [[first patient in|DUE]]
+
+=== hw-06
+risk: high
+issues: ENROLLMENT_LAG, SDV_BACKLOG
+---
+[[Site 402|SITE]] / [[RMV|VISIT_TYPE]] / [[12.02.2026|VISIT_DATE]]
+still only [[3|ENROLLED]] in (target was 10 by now), [[9|SCREENED]] screened. screen fails mostly on HbA1c.
+couldnt finish SDV because the EMR login expired again - got through maybe 40%.
+[[site|OWNER]] to [[renew CRA EMR access|ACTION]] by [[19.02.2026|DUE]]
+[[PI|OWNER]] to [[send recruitment plan|ACTION]]
+
+=== hw-07
+risk: high
+issues: PROTOCOL_DEVIATION, IP_ACCOUNTABILITY
+---
+[[For-cause visit|VISIT_TYPE]] at [[Site 2210|SITE]], [[April 2, 2026|VISIT_DATE]], requested after the sponsor saw the dosing data. Confirmed that two subjects took double doses for most of March because the pharmacy dispensed two kits at once. Accountability logs do not match the IRT - 5 kits unaccounted for.
+Next steps: [[Pharmacy|OWNER]] to [[do a full kit reconciliation against IRT|ACTION]] by [[4/9/2026|DUE]]; [[Site|OWNER]] to [[report both dosing deviations to the IRB|ACTION]] within [[5 days|DUE]].
+
+=== hw-08
+risk: low
+issues:
+---
+[[COV|VISIT_TYPE]] [[site 118|SITE]] [[3/30/26|VISIT_DATE]]
+all queries closed, IP returned to depot and reconciled, reg binder archived. no issues. thanks to the team, great site.
+
+=== hw-09
+risk: medium
+issues: DATA_ENTRY_BACKLOG, QUERY_AGING
+---
+Monitoring visit, [[Site 655|SITE]], [[22 Jan 2026|VISIT_DATE]]. Data is behind by about two weeks - 38 pages not entered, they say the new CRC is still learning the EDC. Query responses slow too (8 open, a few > 30 days). No safety issues; consents fine; no new deviations.
+[[CRC|OWNER]] to [[catch up data entry|ACTION]] by [[05 Feb 2026|DUE]]
+[[CRC|OWNER]] to [[respond to all queries > 30 days|ACTION]] by [[05 Feb 2026|DUE]]
+
+=== hw-10
+risk: low
+issues: PROTOCOL_DEVIATION
+---
+Quick one: [[remote visit|VISIT_TYPE]] [[Site 977|SITE]] [[2026-03-11|VISIT_DATE]]. Subject 977-004 week 8 visit was 3 days out of window because of a snow storm, logged as minor PD. Everything else clean.
+
+=== hw-11
+risk: high
+issues: REG_DOCS, CONSENT, STAFF_TURNOVER
+---
+[[Interim visit|VISIT_TYPE]] - [[Site 1543|SITE]] - [[14MAR2026|VISIT_DATE]] - CRA [[A. Gupta|MONITOR]], PI [[Dr. Silva|PI]]
+IRB continuing review approval expired on Feb 28 and the site screened two more patients after that. Both were consented on an expired ICF version. Lead coordinator left in January, the new one has no GCP certificate on file.
+[[Site|OWNER]] to [[stop screening until IRB approval is renewed|ACTION]] [[immediately|DUE]]
+[[Site|OWNER]] to [[re-consent the two subjects once approval is in place|ACTION]]
+[[New CRC|OWNER]] to [[complete GCP training|ACTION]] by [[31MAR2026|DUE]]
+
+=== hw-12
+risk: low
+issues:
+---
+[[Site 260|SITE]] [[IMV|VISIT_TYPE]] [[06 Feb 2026|VISIT_DATE]]. [[18|SCREENED]] screened / [[12|ENROLLED]] randomised. SDV 100% on new data. AE/SAE review ok. IP accountability reconciled. Temp logs ok. No new staff. Previous visit's open item (missing CV) has been resolved.
+[[CRA|OWNER]] to [[send follow up letter|ACTION]] by [[13 Feb 2026|DUE]]
+
+=== hw-13
+risk: medium
+issues: SAE_REPORTING
+---
+[[Remote|VISIT_TYPE]] check-in with [[Site 3021|SITE]] on [[January 28, 2026|VISIT_DATE]]. One SAE (pneumonia, 3021-002) was sent to safety 4 days after the site found out, not within 24h. Site says the PI was on vacation. Otherwise data and queries are fine.
+[[Site|OWNER]] to [[file a CAPA for late SAE reporting|ACTION]] by [[February 11, 2026|DUE]].
+
+=== hw-14
+risk: high
+issues: TEMP_EXCURSION, IP_ACCOUNTABILITY
+---
+[[IMV|VISIT_TYPE]] at [[Site 742|SITE]] on [[2026-02-19|VISIT_DATE]] with [[Dr. Fatima Osei|PI]].
+The freezer holding IP failed sometime last week. Nobody noticed until Monday and three subjects were dosed from that freezer after the failure. Pharmacy cannot tell which kits went to which subject because the dispensing log was not filled in for Feb.
+[[Pharmacist|OWNER]] to [[reconstruct the dispensing log|ACTION]] by [[2026-02-23|DUE]]
+[[PI|OWNER]] to [[assess the three subjects for safety|ACTION]] [[this week|DUE]]
+[[CRA|OWNER]] to [[notify the sponsor safety team|ACTION]]
+
+=== hw-15
+risk: low
+issues: ENROLLMENT_LAG
+---
+On-site [[monitoring visit|VISIT_TYPE]], [[site 1033|SITE]], [[3 March 2026|VISIT_DATE]]. Enrollment a bit slow: [[4|ENROLLED]] randomized of [[7|SCREENED]] screened vs the 6 we expected by now. Quality of data is good, no queries older than a week. No consent or safety findings.
+
+=== hw-16
+risk: medium
+issues: PI_OVERSIGHT, DATA_ENTRY_BACKLOG
+---
+[[Site 58|SITE]] [[RMV|VISIT_TYPE]] [[01/14/2026|VISIT_DATE]] (CRA [[Tanaka|MONITOR]])
+- PI sign-off on casebooks lagging, 22 unsigned
+- 6 pages from Dec visits not entered
+- no PDs, no SAEs
+[[PI|OWNER]] to [[e-sign casebooks|ACTION]] by [[01/31/2026|DUE]]
+[[CRC|OWNER]] to [[enter December visit pages|ACTION]] by [[01/21/2026|DUE]]
+
+=== hw-17
+risk: high
+issues: CONSENT
+---
+[[For cause visit|VISIT_TYPE]] [[Site 909|SITE]] [[10-Mar-2026|VISIT_DATE]]: three subjects have no signed consent in the source binder at all. Site believes the originals were lost when the clinic moved. Cannot confirm consent was obtained before procedures.
+[[Site|OWNER]] to [[search for the original ICFs|ACTION]] by [[12-Mar-2026|DUE]]
+[[CRA|OWNER]] to [[escalate to QA|ACTION]] [[today|DUE]]
+
+=== hw-18
+risk: low
+issues:
+---
+Hi all, notes from the [[IMV|VISIT_TYPE]] at [[Site 615|SITE]] yesterday ([[Feb 25 2026|VISIT_DATE]]). Pretty uneventful - they are at [[20|ENROLLED]] randomized, data entry is current, no open queries over 2 weeks, no deviations, IP fine. [[Dr. Larsen|PI]] stopped by for the exit meeting.
+Cheers, [[Paulo Reyes|MONITOR]]
+
+=== hw-19
+risk: medium
+issues: QUERY_AGING, SDV_BACKLOG
+---
+[[IMV|VISIT_TYPE]] [[Site 1102|SITE]] [[17.03.2026|VISIT_DATE]]
+queries: 33 open, 12 older than 45d, mostly lab ranges
+SDV: slightly behind, source for visit 6 not printed for 1 pt
+safety/consent: ok
+[[Site|OWNER]] - [[print source for SDV|ACTION]] - [[next visit|DUE]]
+[[Site|OWNER]] - [[answer lab range queries|ACTION]] - [[24.03.2026|DUE]]
+
+=== hw-20
+risk: medium
+issues: STAFF_TURNOVER, REG_DOCS
+---
+[[Site 486|SITE]] had an [[interim monitoring visit|VISIT_TYPE]] on [[February 3, 2026|VISIT_DATE]]. Two research nurses joined in January and are running visits, but neither is on the delegation log yet and their CVs are not filed. Other than that the visit went well, [[16|SCREENED]] screened and [[10|ENROLLED]] randomized, no data or safety concerns.
+[[PI|OWNER]] to [[add both nurses to the delegation log|ACTION]] by [[February 10, 2026|DUE]].
+[[Site|OWNER]] to [[file signed CVs|ACTION]] by [[February 10, 2026|DUE]].
+
+=== hw-21
+risk: low
+issues:
+---
+[[RMV|VISIT_TYPE]] [[site 2087|SITE]] [[2026-01-09|VISIT_DATE]] — reviewed ICFs for 3 new pts (ok), AE log (no new SAE), deviation log (nothing new). Queries 2 open, both < 1 wk. fine.
+
+=== hw-22
+risk: high
+issues: PROTOCOL_DEVIATION, PI_OVERSIGHT, SAE_REPORTING
+---
+[[IMV|VISIT_TYPE]] [[Site 3340|SITE]] [[21-Jan-2026|VISIT_DATE]], CRA [[J. Walsh|MONITOR]]
+Subject 3340-009 was randomized with an eGFR below the exclusion cutoff - PI signed eligibility without looking at the lab. Same subject later had a grade 3 kidney injury that was entered as an AE, not an SAE, even though they were hospitalized 2 nights.
+[[PI|OWNER]] to [[report the hospitalization as an SAE|ACTION]] within [[24 hours|DUE]]
+[[Site|OWNER]] to [[report the eligibility deviation to the IRB|ACTION]] by [[28-Jan-2026|DUE]]
+[[PI|OWNER]] to [[re-review eligibility for all subjects randomized since November|ACTION]]
+
+=== hw-23
+risk: low
+issues: REG_DOCS
+---
+[[SIV|VISIT_TYPE]] [[Site 1999|SITE]] [[03/02/2026|VISIT_DATE]] - went well, staff engaged. Only open item: lab certification (CAP) for the local lab expired last month, need the renewed cert in the binder.
+[[Site|OWNER]] to [[send updated CAP certificate|ACTION]] by [[03/16/2026|DUE]]
+
+=== hw-24
+risk: medium
+issues: IP_ACCOUNTABILITY
+---
+Visit summary - [[on-site IMV|VISIT_TYPE]], [[Site 731|SITE]], [[11 March 2026|VISIT_DATE]]. Kit 44120 was assigned to 731-003 in IRT but dispensed to 731-005. Both subjects are on active drug so no unblinding risk, but it needs to be documented. Returned bottles were also not counted for the last two visits.
+[[Pharmacy|OWNER]] to [[document the kit swap|ACTION]] by [[18 March 2026|DUE]]
+[[Pharmacy|OWNER]] to [[count returned bottles|ACTION]] at [[each visit|DUE]]
