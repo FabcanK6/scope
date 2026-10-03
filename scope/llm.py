@@ -60,6 +60,14 @@ def quota_message(e: QuotaExceeded) -> str:
     return f"Gemini's free per-minute limit was reached. Wait {wait} and try again."
 
 
+class BadAnswer(LLMError):
+    """The model answered, but not with usable JSON. ``raw`` keeps the answer for diagnosis."""
+
+    def __init__(self, message: str, raw: str = ""):
+        super().__init__(message)
+        self.raw = raw
+
+
 class ModelBusy(LLMError):
     """Temporary overload (HTTP 500/502/503/504 or a timeout); retry, then try another model."""
 
@@ -80,6 +88,7 @@ class GeminiClient:
         self.timeout = timeout
         self._listed: list[str] | None = None
         self._sleep = time.sleep
+        self.avoid: set[str] = set()  # models that just gave a bad answer: tried last
 
     # -- transport (patched in tests) -------------------------------------
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -135,8 +144,9 @@ class GeminiClient:
                 self._listed = self.list_models()
             except ModelBusy:
                 self._listed = []
-        order = [self.model, self.preferred, *self._listed, "gemini-flash-latest"]
-        return list(dict.fromkeys(m for m in order if m))[: self.max_models]
+        order = list(dict.fromkeys(m for m in [self.model, self.preferred, *self._listed, "gemini-flash-latest"] if m))
+        order = [m for m in order if m not in self.avoid] + [m for m in order if m in self.avoid]
+        return order[: self.max_models]
 
     # -- generation -------------------------------------------------------
     def generate(self, system: str, prompt: str, schema: dict | None = None) -> str:
@@ -185,9 +195,12 @@ class GeminiClient:
             return json.loads(raw)
         except json.JSONDecodeError:
             m = re.search(r"\{.*\}", raw, flags=re.S)
-            if m:
-                return json.loads(m.group(0))
-            raise LLMError("Gemini did not return valid JSON.") from None
+            try:
+                if m:
+                    return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+            raise BadAnswer("Gemini did not return valid JSON.", raw) from None
 
 
 # ---------------------------------------------------------------------------

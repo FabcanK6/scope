@@ -12,11 +12,12 @@ supporting text is actually in the note.
 
 from __future__ import annotations
 
+import copy
 import json
 import re
 import time
 
-from scope.llm import RUBRIC_TEXT, _norm, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
+from scope.llm import RUBRIC_TEXT, BadAnswer, _norm, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
 from scope.record import build_record, normalize_date
 from scope.rules import RuleParser
 from scope.schema import ISSUE_BY_CODE, ISSUE_CODES
@@ -236,6 +237,14 @@ _RAMBLE = re.compile(r"\?|\bwait\b|let'?s (?:check|see)|\bhmm+\b|\bactually\b|\b
 _FOREIGN = re.compile(r"[\u3000-\u9fff\uac00-\ud7af\u0400-\u04ff]")
 
 
+class Unreadable(LLMError):
+    """Every attempt gave an empty or garbled answer. Keeps the last answer so it can be inspected."""
+
+    def __init__(self, reason: str, raw: str, model: str | None):
+        super().__init__(f"{UNREADABLE} (last problem: {reason}; model: {model or 'unknown'})")
+        self.reason, self.raw, self.model = reason, raw, model
+
+
 def output_problem(data, text: str) -> str | None:
     """Why an LLM answer can't be trusted as a whole (None when it looks sound)."""
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
@@ -293,14 +302,26 @@ class LLMParser:
     attempts = 3  # a garbled or empty answer is asked again, never scored
 
     def read(self, text: str) -> dict:
-        for _ in range(self.attempts):
-            data = self.extract(text)
-            if output_problem(data, text) is None:
-                return data
-        raise LLMError(UNREADABLE)
+        """Ask for a reading; a bad answer is asked again, preferring a different model each time."""
+        reason, raw = "", ""
+        try:
+            for _ in range(self.attempts):
+                try:
+                    data = self.extract(text)
+                    reason, raw = output_problem(data, text), json.dumps(data, ensure_ascii=False, indent=1)
+                except BadAnswer as e:
+                    reason, raw = "not valid JSON", e.raw
+                if not reason:
+                    return data
+                if self.client.model:
+                    self.client.avoid.add(self.client.model)
+        finally:
+            self.client.avoid.clear()
+        raise Unreadable(reason, raw, self.client.model)
 
     def predict(self, text: str) -> dict:
         data = self.read(text)
+        raw_answer = copy.deepcopy(data)  # exactly what the LLM said, before SCOPE adds its checks
         tokens = tokenize(text)
         char_spans: list[tuple[str, int, int]] = []
         problems: list[str] = []
@@ -373,7 +394,7 @@ class LLMParser:
                                                       for a in action_items],
             "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
             "backend": self.name,
-            "model": self.client.model, "llm_output": data,
+            "model": self.client.model, "llm_output": raw_answer,
         }
 
     def predict_batch(self, texts: list[str]) -> list[dict]:
@@ -388,4 +409,4 @@ class LLMParser:
         return build_record(text, self.predict(text))
 
 
-__all__ = ["LLMParser", "LLMError", "SYSTEM", "FEW_SHOT_IDS"]
+__all__ = ["LLMParser", "LLMError", "Unreadable", "SYSTEM", "FEW_SHOT_IDS"]

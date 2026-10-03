@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from scope.data.generate import read_jsonl  # noqa: E402
 from scope.data.handwritten import load_handwritten, load_realistic  # noqa: E402
-from scope.engine import ENGINE_REV, SYSTEM, LLMParser  # noqa: E402
+from scope.engine import ENGINE_REV, SYSTEM, LLMParser, Unreadable  # noqa: E402
 from scope.llm import GeminiClient, LLMError, draft_followup, get_api_key  # noqa: E402
 from scope.record import audit_summary, to_row  # noqa: E402
 from scope.schema import ISSUE_BY_CODE, ISSUE_GROUPS  # noqa: E402
@@ -108,6 +108,13 @@ def examples() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
+def show_llm_error(e: LLMError) -> None:
+    st.error(str(e))
+    if isinstance(e, Unreadable) and e.raw:
+        with st.expander("What Gemini returned (not used)"):
+            st.code(e.raw[:6000])
+
+
 def risk_badge(level: str) -> str:
     return (f"<span style='background:{RISK_COLORS[level]};color:white;padding:5px 14px;border-radius:14px;"
             f"font-weight:700;font-size:1.05rem'>{level.upper()} RISK</span>")
@@ -203,7 +210,7 @@ with tab_one:
             with st.spinner("Reading the note..."):
                 rec = cached_llm("record", note, lambda: parser.analyze(note))
         except LLMError as e:
-            st.error(str(e))
+            show_llm_error(e)
     if rec:
         v = rec["visit"]
         c1, c2, c3, c4 = st.columns([1.6, 1, 1, 1])
@@ -316,13 +323,18 @@ with tab_batch:
         st.info("Add a Gemini API key in the sidebar first.")
     elif texts:
         recs, bar = [], st.progress(0.0, text="Reading notes...")
+        skipped = 0
         for i, t in enumerate(texts):
             try:
                 recs.append(cached_llm("record", t, lambda t=t: parser.analyze(t)))
+            except Unreadable:
+                skipped += 1
             except LLMError as e:
                 st.error(f"Stopped after {i} notes: {e}")
                 break
             bar.progress((i + 1) / len(texts), text=f"Read {i + 1} of {len(texts)} notes")
+        if skipped:
+            st.warning(f"{skipped} note(s) could not be read reliably and are left out. Run them again later.")
         if recs:
             df = pd.DataFrame([to_row(r) for r in recs])
             c1, c2, c3 = st.columns(3)
@@ -360,19 +372,32 @@ with tab_check:
         st.session_state["check"] = choice
     if parser and st.session_state.get("check") == choice:
         rows, recs, bar = sets[choice], [], st.progress(0.0, text="Reading notes...")
+        unread: dict[str, Unreadable] = {}
         for i, r in enumerate(rows):
             try:
                 recs.append(cached_llm("record", r["text"], lambda t=r["text"]: parser.analyze(t)))
-            except LLMError as e:
+            except Unreadable as e:  # this note could not be read; carry on with the others
+                recs.append(None)
+                unread[r["id"]] = e
+            except LLMError as e:  # quota or busy: stop
                 st.error(f"Stopped after {i} notes: {e}")
                 break
             bar.progress((i + 1) / len(rows), text=f"Read {i + 1} of {len(rows)} notes")
-        if recs:
+        for note_id, e in unread.items():
+            with st.expander(f"{note_id}: not scored, Gemini's answer was unusable ({e.reason}, {e.model})"):
+                st.code(e.raw[:6000] or "(empty)")
+        if any(recs):
             def names(codes):
                 return ", ".join(ISSUE_BY_CODE[c].display for c in sorted(codes)) or "none"
 
             table = []
             for r, rec in zip(rows, recs):
+                if rec is None:
+                    table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
+                                  "CRA risk": r["risk"], "SCOPE risk": "not read", "Risk agrees": "-",
+                                  "CRA issues": names(r["issues"]), "SCOPE issues": "-", "Issues agree": "-",
+                                  "Safety alert": ""})
+                    continue
                 got = {i["code"] for i in rec["issues"]}
                 table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
                               "CRA risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
@@ -381,7 +406,7 @@ with tab_check:
                               "Issues agree": "yes" if set(r["issues"]) == got else "partly",
                               "Safety alert": "yes" if rec.get("alerts") else ""})
             df = pd.DataFrame(table)
-            n = len(df)
+            n = int((df["SCOPE risk"] != "not read").sum())
             high = df[df["CRA risk"] == "high"]
             c1, c2, c3 = st.columns(3)
             c1.metric("Risk level agrees", f"{int((df['Risk agrees'] == 'yes').sum())} / {n}")
@@ -391,7 +416,7 @@ with tab_check:
                       int(((df["SCOPE risk"] == "high") & (df["CRA risk"] != "high")).sum()))
             st.dataframe(df, hide_index=True, width="stretch")
             for r, rec in zip(rows, recs):
-                if r["risk"] == rec["risk"]["level"]:
+                if rec is None or r["risk"] == rec["risk"]["level"]:
                     continue
                 with st.expander(f"{r['id']}: CRA said {r['risk']}, SCOPE said {rec['risk']['level']}"):
                     st.text(r["text"])

@@ -173,9 +173,20 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(rec["risk"]["level"], "high")
         self.assertEqual(len([c for c in client.calls if c[0] == "POST"]), 3)
         empty = {"visit": {}, "findings": [], "actions": [], "summary": ""}
-        with self.assertRaises(LLMError) as ctx:
-            LLMParser(FakeClient([fake_response(garbled), fake_response(empty), fake_response(garbled)])).analyze(note)
-        self.assertEqual(str(ctx.exception), UNREADABLE)
+        from scope.engine import Unreadable
+
+        with self.assertRaises(Unreadable) as ctx:
+            LLMParser(FakeClient([fake_response(garbled), fake_response(empty), fake_response("not json")])
+                      ).analyze(note)
+        self.assertTrue(str(ctx.exception).startswith(UNREADABLE))
+        self.assertEqual(ctx.exception.reason, "not valid JSON")
+        self.assertEqual(ctx.exception.raw, "not json")  # kept for diagnosis
+        # a bad answer from one model -> the next attempt goes to another model
+        client = FakeClient([fake_response(empty), fake_response(good)], models=("gemini-9-flash", "gemini-8-flash"))
+        rec = LLMParser(client).analyze(note)
+        self.assertEqual(rec["model"], "gemini-8-flash")
+        self.assertEqual(client.avoid, set())
+        self.assertNotIn("verified", rec["llm_output"]["findings"][0])  # raw answer is untouched
 
     def test_safety_tripwire(self):
         from scope.data.handwritten import load_handwritten
