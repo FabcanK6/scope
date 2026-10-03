@@ -301,9 +301,29 @@ def _norm(s: str) -> str:
     return " ".join(s.lower().split())
 
 
+_MAX_GAP = 250  # characters allowed between the parts of a quote joined with "..."
+_ELLIPSIS = re.compile(r"\s*(?:\.{3,}|\u2026|\[\.\.\.\])\s*")
+
+
 def verify_quote(quote: str, note: str) -> bool:
     """True when the quote appears in the note (ignoring case, spacing and curly quotes),
-    or matches a sentence of the note almost exactly."""
+    or matches a sentence of the note almost exactly.
+
+    Models often join two parts of a note with an ellipsis ("... shows an episode ... The site did not report it",
+    "SAEs ... was in order"). Such a quote counts when every part is in the note, in that order, close together
+    (at most ``_MAX_GAP`` characters apart), and the parts are not trivially short."""
+    parts = [p for p in _ELLIPSIS.split(quote or "") if p.strip(" .")]
+    if len(parts) > 1:
+        n, at = _norm(note), None
+        qs = [_norm(part).strip(" .") for part in parts]
+        if min(len(q) for q in qs) < 4 or sum(len(q) for q in qs) < 15:
+            return False
+        for q in qs:
+            i = n.find(q, at or 0)
+            if i < 0 or (at is not None and i - at > _MAX_GAP):
+                return False
+            at = i + len(q)
+        return True
     q, n = _norm(quote).strip(" ."), _norm(note)
     if not q:
         return False

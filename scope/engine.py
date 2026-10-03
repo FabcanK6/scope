@@ -18,8 +18,9 @@ import re
 import time
 
 from scope import deadlines as DL
+from scope import learning as _learning
 from scope import profile as _profile
-from scope.llm import SEVERITIES, STATUSES, BadAnswer, GeminiClient, LLMError, _norm, verify_quote
+from scope.llm import _ELLIPSIS, SEVERITIES, STATUSES, BadAnswer, GeminiClient, LLMError, _norm, verify_quote
 from scope.record import build_record, normalize_date
 from scope.rules import RuleParser
 from scope.schema import ISSUE_CODES
@@ -35,6 +36,7 @@ EXTRACT_SCHEMA = {
         "findings": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
             "issue": {"type": "STRING", "enum": ISSUE_CODES},
             "status": {"type": "STRING", "enum": STATUSES},
+            "study_rule": {"type": "INTEGER", "nullable": True},
             "severity": {"type": "STRING", "enum": SEVERITIES},
             "evidence": {"type": "STRING"},
             "explanation": {"type": "STRING"},
@@ -44,9 +46,9 @@ EXTRACT_SCHEMA = {
             "escalation_evidence": {"type": "STRING"},
             "clock_start": _STR,
             "reported_on": _STR},
-            "required": ["issue", "status", "severity", "evidence", "explanation", "repeat", "subjects_affected",
-                         "site_wide", "escalation_evidence", "clock_start", "reported_on"],
-            "propertyOrdering": ["issue", "status", "severity", "evidence", "explanation", "repeat",
+            "required": ["issue", "status", "study_rule", "severity", "evidence", "explanation", "repeat",
+                         "subjects_affected", "site_wide", "escalation_evidence", "clock_start", "reported_on"],
+            "propertyOrdering": ["issue", "status", "study_rule", "severity", "evidence", "explanation", "repeat",
                                  "subjects_affected", "site_wide", "escalation_evidence", "clock_start",
                                  "reported_on"]}},
         "actions": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
@@ -165,7 +167,12 @@ for _answer in (ANSWER_1, ANSWER_2, ANSWER_3):
 
 def _dump(answer: dict, profile: dict) -> str:
     enabled = {t["code"] for t in _profile.enabled_topics(profile)}
-    answer = {**answer, "findings": [f for f in answer["findings"] if f["issue"] in enabled]}
+    findings = []
+    for f in answer["findings"]:
+        if f["issue"] in enabled:  # every field in schema order, so the examples show the full shape
+            findings.append({"issue": f["issue"], "status": f["status"], "study_rule": f.get("study_rule"),
+                             **{k: v for k, v in f.items() if k not in ("issue", "status", "study_rule")}})
+    answer = {**answer, "findings": findings}
     return json.dumps({k: answer[k] for k in EXTRACT_SCHEMA["propertyOrdering"]})
 
 
@@ -220,7 +227,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "7.4"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "7.9"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -241,6 +248,15 @@ def _find(text: str, value: str | None, start: int = 0, end: int | None = None) 
     pattern = r"\s+".join(re.escape(w) for w in value.split())
     m = re.compile(pattern, re.I).search(text, start, end)
     return (m.start(), m.end()) if m else None
+
+
+def _find_parts(text: str, value: str | None) -> tuple[int, int] | None:
+    """A quote whose parts are joined with "...": from the start of the first part to the end of the last."""
+    parts = [p for p in _ELLIPSIS.split(value or "") if p.strip(" .")]
+    if len(parts) < 2:
+        return None
+    first, last = _find(text, parts[0]), _find(text, parts[-1])
+    return (first[0], last[1]) if first and last and last[1] > first[0] else None
 
 
 _PIECES = re.compile(r"\s+(?:-|–|—|→|->|=>)\s+|\s*[;|\n]\s*|\s+\(|\)\s*")
@@ -349,12 +365,23 @@ class LLMParser:
         self.client = client
         self.sleep = sleep
         self.profile = profile or _profile.default_profile()
+        self.library: dict | None = None  # shared learning (scope.learning): approved rulings from reviewers
+        self.holdout = False  # accuracy checks: a note never sees a ruling made on that same note
+        self.learned_from: list[dict] = []
 
     def system_for(self, text: str) -> str:
-        """Instructions for this note: the profile's rubric plus the approved corrections most like it."""
-        system = build_system(self.profile)
-        learned = _profile.corrections_text(self.profile, text)
-        return f"{system}\n\n{learned}" if learned else system
+        """Instructions for this note: the profile's rubric, the study's approved corrections most like it, and
+        the shared rulings from reviewers on similar notes."""
+        parts = [build_system(self.profile), _profile.corrections_text(self.profile, text)]
+        self.learned_from = []
+        if self.library:
+            topics = _profile.topic_map(self.profile)
+            picked = _learning.relevant(_learning.rulings(self.library, self.profile["name"], topics), text,
+                                        exclude_same_note=self.holdout)
+            self.learned_from = [{"id": c["id"], "similarity": round(sim, 2),
+                                  "ruling": _learning.ruling_line(c, topics)[2:]} for c, sim in picked]
+            parts.append(_learning.prompt_text(picked, topics))
+        return "\n\n".join(p for p in parts if p)
 
     def extract(self, text: str) -> dict:
         return self.client.generate_json(self.system_for(text), f"Note:\n\"\"\"\n{text}\n\"\"\"\nAnswer:",
@@ -423,7 +450,7 @@ class LLMParser:
             f["verified"] = verify_quote(f.get("evidence", ""), text)
             f["display"] = topics[f["issue"]]["display"]
             f["group"] = topics[f["issue"]]["group"]
-            loc = _find(text, f.get("evidence"))
+            loc = _find(text, f.get("evidence")) or _find_parts(text, f.get("evidence"))
             f["char_start"], f["char_end"] = loc if loc else (-1, -1)
             try:
                 f["subjects_affected"] = int(f.get("subjects_affected")) if f.get("subjects_affected") else None
@@ -438,6 +465,9 @@ class LLMParser:
             if claims and not f["escalation_ok"]:
                 problems.append(f"'{f['display']}' was reported as a repeat or widespread problem, but the quote "
                                 "for that is not in the note, so it was not raised")
+            if not f["verified"]:
+                f["study_rule"] = None
+            f["rule_applied"] = _profile.apply_study_rule(f, self.profile)
             f["final_severity"], f["escalated_by"] = _profile.final_severity(f, self.profile)
             findings.append(f)
         unverified = [f for f in findings if not f["verified"]]
@@ -483,6 +513,7 @@ class LLMParser:
             "backend": self.name,
             "model": self.client.model, "provider": getattr(self.client, "provider", ""), "seconds": seconds,
             "engine_log": list(getattr(self.client, "trail", [])),
+            "learned_from": list(self.learned_from),
             "llm_output": raw_answer, "profile": _profile.label(self.profile),
             "topic_names": {c: (t["display"], t["group"]) for c, t in _profile.topic_map(self.profile).items()},
         }

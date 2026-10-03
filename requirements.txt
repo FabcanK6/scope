@@ -9,3 +9,5 @@ pypdf>=4.0
 python-docx>=1.1
 # Keep users' studies in their own browser between visits
 streamlit-js-eval>=1.0
+# Shared learning library (a private Hugging Face dataset)
+huggingface_hub>=0.30

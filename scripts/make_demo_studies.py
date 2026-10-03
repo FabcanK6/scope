@@ -222,8 +222,9 @@ STUDIES = [
     "excursion was not reported and the doses were not quarantined. Three subjects (15-020, 15-021, 15-022) were "
     "vaccinated from that fridge on 7 Oct. Site to report the excursion and the three administrations to the "
     "sponsor today."),
-   ("Missed Day 29 sample", "medium",
-    "The Day 29 immunogenicity sample is the primary endpoint; missing it is an important deviation (major).",
+   ("Missed Day 29 sample", "high",
+    "Two problems: the missed Day 29 immunogenicity sample (primary endpoint) is an important deviation (major), "
+    "and an expired lab kit is a lab sample problem (major). Both count, even from one sentence: high.",
     "Visit report VAX-118, Site 22, 16 October 2026. Subject 22-013's Day 29 blood sample was not collected because "
     "the lab kit had expired; the visit itself was on time. Diaries complete for all subjects. No excursions, no "
     "SAEs. Lab coordinator to check kit expiry dates weekly."),

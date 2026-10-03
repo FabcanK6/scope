@@ -245,6 +245,42 @@ def risk_from_points(points: int, profile: dict) -> str:
     return "high" if points >= th["high"] else "medium" if points >= th["medium"] else "low"
 
 
+_RULE_TAG = re.compile(r"\[(?:([A-Z][A-Z0-9_]*), )?(minor|major|critical) if broken\]")
+_RULE_SOURCE = re.compile(r"\((protocol [^()]*?, p\. ?\d+)\)\s*$")
+
+
+def rule_severity(rule: str) -> tuple[str | None, str] | None:
+    """(topic or None, severity) from a study rule tagged like '[PROTOCOL_DEVIATION, major if broken]'."""
+    m = _RULE_TAG.search(rule or "")
+    return (m.group(1), m.group(2)) if m else None
+
+
+def rule_source(rule: str) -> str:
+    m = _RULE_SOURCE.search(rule or "")
+    return m.group(1) if m else ""
+
+
+def apply_study_rule(f: dict, profile: dict) -> str | None:
+    """When the model says a study rule covers an active finding and that rule states a severity for the same topic,
+    the rule decides the severity (the protocol outranks the model). Returns a short note of what was applied."""
+    n = f.get("study_rule")
+    if isinstance(n, str):  # "R3" or "3" from looser models
+        m = re.search(r"\d+", n)
+        n = int(m.group(0)) if m else None
+    rules = profile.get("study_rules") or []
+    if f.get("status") != "active" or not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= len(rules):
+        return None
+    parsed = rule_severity(rules[n - 1])
+    if not parsed or (parsed[0] and parsed[0] != f.get("issue")):
+        return None
+    source = rule_source(rules[n - 1])
+    note = f"study rule R{n}" + (f" ({source})" if source else "")
+    if parsed[1] != f.get("severity"):
+        note += f": {parsed[1]}, not {f.get('severity')}"
+        f["severity"] = parsed[1]
+    return note
+
+
 def final_severity(f: dict, profile: dict) -> tuple[str, list[str]]:
     """Escalation: a problem affecting ``subjects_threshold``+ subjects (or site-wide) is raised one level, up to
     ``subjects_max``; a repeat finding is raised one level (if switched on). Both can apply. Only counted when the
@@ -311,8 +347,10 @@ def rubric_text(profile: dict) -> str:
                      'into "clock_start" and the date of the report into "reported_on", word for word from the note '
                      '(null if the note does not say).')
     if profile["study_rules"]:
-        lines.append("Study-specific rules (these come from the protocol and override the rubric above):")
-        lines += [f"- {r}" for r in profile["study_rules"]]
+        lines.append("Study-specific rules (these come from the protocol and override the rubric above). When a "
+                     'finding falls under one of them, put its number in "study_rule" (R2 -> 2) and use the severity '
+                     'that rule gives; otherwise "study_rule" is null:')
+        lines += [f"- R{i}: {r}" for i, r in enumerate(profile["study_rules"], 1)]
     return "\n".join(lines)
 
 

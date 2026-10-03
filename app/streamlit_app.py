@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import html
 import json
 import sys
@@ -22,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 
 from scope import profile as P  # noqa: E402
 from scope import demos as DM  # noqa: E402
+from scope import learning as L  # noqa: E402
 from scope import protocol as PR  # noqa: E402
 from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
@@ -51,6 +53,57 @@ def _secret(name: str):
         return st.secrets.get(name)
     except Exception:  # no secrets configured
         return None
+
+
+# ---------------------------------------------------------------------------
+# Shared learning (scope/learning.py): corrections people share, approved by a curator, used for everyone
+# ---------------------------------------------------------------------------
+def _setting(name: str) -> str:
+    import os
+
+    return str(_secret(name) or os.environ.get(name) or "").strip()
+
+
+@st.cache_resource(show_spinner=False)
+def learning_store():
+    """The shared library, if this copy of SCOPE has one (HF_TOKEN + SCOPE_LEARNING_REPO, or a local folder)."""
+    try:
+        if _setting("SCOPE_LEARNING_REPO") and _setting("HF_TOKEN"):
+            return L.HFStore(_setting("SCOPE_LEARNING_REPO"), _setting("HF_TOKEN"))
+        if _setting("SCOPE_LEARNING_DIR"):
+            return L.LocalStore(_setting("SCOPE_LEARNING_DIR"))
+    except L.LearningError:
+        return None
+    return None
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _load_library() -> dict:
+    try:
+        return learning_store().load()
+    except L.LearningError as e:  # remembered for 2 minutes too, so a outage doesn't slow every reading
+        return {"_error": str(e)}
+
+
+def library() -> dict | None:
+    """Approved, pending and rejected cases (refreshed every 2 minutes); None when shared learning is off or down."""
+    if learning_store() is None:
+        return None
+    lib = _load_library()
+    if "_error" in lib:
+        st.session_state["learning_error"] = lib["_error"]
+        return None
+    return lib
+
+
+def share_case(case: dict) -> bool:
+    try:
+        learning_store().add(case)
+    except L.LearningError as e:
+        st.error(f"Not shared: {e}")
+        return False
+    _load_library.clear()
+    return True
 
 
 SHARED = "App's free engine (Gemini)"
@@ -105,6 +158,7 @@ def get_parser() -> LLMParser | None:
         parser = LLMParser(client)
         st.session_state["parser"], st.session_state["parser_sig"] = parser, sig
     parser.profile = current_profile()
+    parser.library = library()
     return parser
 
 
@@ -117,7 +171,9 @@ def shared_cache() -> dict:
 def _cache_key(kind: str, text: str, profile: dict | None = None) -> str:
     fp = hashlib.sha256((api_key() or "").encode()).hexdigest()[:12]
     prof = P.fingerprint(profile or current_profile())
-    return f"{kind}:{ENGINE_VERSION}:{prof}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
+    lib = library()
+    learned = L.digest(lib) if lib else "-"  # what SCOPE has learned changes the answer
+    return f"{kind}:{ENGINE_VERSION}:{prof}:{learned}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
 def cached_llm(kind: str, text: str, fn, profile: dict | None = None):
@@ -228,14 +284,16 @@ def select_study() -> None:
     st.session_state.pop("expected", None)
 
 
-def analyze_under(text: str, prof: dict) -> dict:
-    """Score a note under a given study profile (used for demo notes in the accuracy check)."""
+def analyze_under(text: str, prof: dict | None = None) -> dict:
+    """Score a note for the accuracy check: under a given study profile (demo notes), and never with a ruling that
+    was made on this same note, so SCOPE is not shown the answer."""
     saved = parser.profile
-    parser.profile = prof
+    parser.profile = prof or saved
+    parser.holdout = True
     try:
-        return cached_llm("record", text, lambda: parser.analyze(text), profile=prof)
+        return cached_llm("check", text, lambda: parser.analyze(text), profile=parser.profile)
     finally:
-        parser.profile = saved
+        parser.profile, parser.holdout = saved, False
 
 
 @st.cache_data
@@ -300,7 +358,8 @@ def highlight(text: str, rec: dict) -> str:
 
 def findings_table(rec: dict, status: str) -> pd.DataFrame:
     rows = [{"Issue": f["display"], "Severity": f.get("final_severity", f["severity"]),
-             "Raised because": ", ".join(f.get("escalated_by") or []),
+             "Severity set by": "; ".join(([f["rule_applied"]] if f.get("rule_applied") else [])
+                                         + [f"raised: {x}" for x in f.get("escalated_by") or []]),
              "Evidence (quoted from the note)": f["evidence"], "Why": f.get("explanation", "")}
             for f in rec.get("findings", []) if f["status"] == status and f.get("verified")]
     order = {"critical": 0, "major": 1, "minor": 2}
@@ -308,21 +367,40 @@ def findings_table(rec: dict, status: str) -> pd.DataFrame:
     if status != "active":
         for r in rows:
             r.pop("Severity")
-            r.pop("Raised because")
-    elif not any(r["Raised because"] for r in rows):
+            r.pop("Severity set by")
+    elif not any(r["Severity set by"] for r in rows):
         for r in rows:
-            r.pop("Raised because")
+            r.pop("Severity set by")
     return pd.DataFrame(rows)
 
 
-def correction_form(note: str, rec: dict) -> None:
-    """Let a user correct SCOPE. Corrections are proposed; the study lead approves them in the Study setup tab."""
+def feedback(note: str, rec: dict) -> None:
+    """Was SCOPE right? A one-click confirmation (shared, when shared learning is on) or a correction."""
+    store = learning_store()
+    if store is not None:
+        key = f"confirmation:{L.note_hash(note)}:{rec['risk']['level']}"
+        done = key in st.session_state.setdefault("shared", set())
+        c1, c2 = st.columns([1, 2.4])
+        if c1.button("SCOPE got this right", key=f"ok_{key}", disabled=done):
+            if share_case(L.make_case("confirmation", note, rec, current_profile())):
+                st.session_state["shared"].add(key)
+                done = True
+        c2.caption("Shared for review, so SCOPE learns from it. Thank you!" if done else
+                   "One click teaches SCOPE. It shares this note and SCOPE's reading for review: fictional or "
+                   "de-identified notes only.")
+    correction_form(note, rec, store)
+
+
+def correction_form(note: str, rec: dict, store=None) -> None:
+    """Let a user correct SCOPE. Corrections are proposed; the study lead approves them in the Study setup tab, and
+    a shared correction is reviewed for the shared library."""
     prof = current_profile()
     topics = P.enabled_topics(prof)
     found = [f for f in rec.get("findings", []) if f.get("verified")]
     with st.expander("Disagree with SCOPE? Correct it"):
-        st.caption("Your correction is saved to the study profile as a proposal. Once the study lead approves it, "
-                   "SCOPE shows it to the AI model as an example whenever it reads a similar note.")
+        st.caption("Your correction is saved to this study as a proposal. Once the study lead approves it, SCOPE "
+                   "uses it whenever it reads a similar note." + (" Share it too, and once reviewed it helps "
+                                                                  "every SCOPE user." if store else ""))
         with st.form(f"correct_{hashlib.sha256(note.encode()).hexdigest()[:8]}", clear_on_submit=True):
             options = [f"{f['display']} ({f['status'].replace('_', ' ')}"
                        f"{', ' + f.get('final_severity', f['severity']) if f['status'] == 'active' else ''})"
@@ -341,6 +419,8 @@ def correction_form(note: str, rec: dict) -> None:
             reason = st.text_input("Why (one line)")
             cra_risk = st.selectbox("What should this visit's risk be? (optional)", ["", "low", "medium", "high"])
             who = st.text_input("Your name or initials (optional)")
+            share = store is not None and st.checkbox(
+                "Share it so SCOPE learns for everyone (fictional or de-identified notes only)")
             if st.form_submit_button("Save correction"):
                 if not quote.strip() or not verify_quote(quote, note):
                     st.error("The quote must be words copied from the note.")
@@ -352,8 +432,100 @@ def correction_form(note: str, rec: dict) -> None:
                               if chosen else "missed")
                 P.add_correction(prof, note=note, issue=code, status=stat, severity=severity, quote=quote,
                                  reason=reason, scope_said=scope_said, cra_risk=cra_risk or None, who=who)
-                st.success("Correction saved as a proposal. Approve it in the Study setup tab, then download the "
-                           "profile to keep it.")
+                msg = "Correction saved for this study as a proposal (approve it in the Study setup tab)."
+                if share:
+                    case = L.make_case("correction", note, rec, prof, by=who, correction={
+                        "issue": code, "display": topic, "status": stat,
+                        "severity": severity if stat == "active" else None, "quote": quote.strip(),
+                        "reason": reason.strip(), "risk": cra_risk or None})
+                    if share_case(case):
+                        msg += " Shared for review: once approved, SCOPE uses it for everyone."
+                st.success(msg)
+
+
+def learned_tab() -> None:
+    """What SCOPE has learned from its users, and the review queue for curators."""
+    st.markdown("**SCOPE learns from the people who use it.** When someone corrects a reading, or confirms it was "
+                "right, and shares it, a reviewer checks it. Once approved, SCOPE uses that ruling on similar notes "
+                "for everyone, straight away. Nothing changes SCOPE's judgement without a person approving it, and "
+                "every ruling keeps who, when and why.")
+    store = learning_store()
+    if store is None:
+        st.info("Shared learning is not switched on for this copy of SCOPE. Corrections still improve each study "
+                "(see Study setup).")
+        return
+    lib = library()
+    if lib is None:
+        st.warning("The shared library can't be reached right now, so SCOPE is reading notes without it. "
+                   + st.session_state.get("learning_error", ""))
+        return
+    approved = lib["approved"]
+    rulings_ = [c for c in approved if c["kind"] == "correction"]
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Rulings in use", len(rulings_))
+    m2.metric("Confirmed readings", len(approved) - len(rulings_))
+    m3.metric("Waiting for review", len(lib["pending"]))
+    if rulings_:
+        st.dataframe(pd.DataFrame([{
+            "Approved": c.get("decided") or "", "When a note says": c["correction"]["quote"],
+            "Ruling": L.ruling_line(c, P.topic_map(current_profile())).split(": ", 1)[-1],
+            "Applies to": "All studies" if c.get("applies_to") == L.ALL_STUDIES else c.get("applies_to")}
+            for c in reversed(rulings_)]), hide_index=True, width="stretch")
+    else:
+        st.caption("No rulings yet. Correct a reading and tick **Share it** to teach SCOPE the first one.")
+    st.caption("Confirmed readings and corrections are also the training data for SCOPE's own model, the next step "
+               "in how it learns.")
+
+    with st.expander("Review shared cases (curators)"):
+        expected = _setting("SCOPE_CURATOR_KEY")
+        if not expected:
+            st.caption("Add SCOPE_CURATOR_KEY to the app's secrets to review shared cases here.")
+            return
+        given = st.text_input("Curator key", type="password", key="curator_key")
+        if not given:
+            return
+        if not hmac.compare_digest(given.encode(), expected.encode()):
+            st.error("That key is not right.")
+            return
+        rows = L.training_rows(lib)
+        st.download_button("Download training data (.jsonl)", "\n".join(json.dumps(r) for r in rows),
+                           file_name="scope_training.jsonl", disabled=not rows)
+        if not lib["pending"]:
+            st.success("Nothing is waiting for review.")
+        topics = P.topic_map(current_profile())
+        for c in lib["pending"][:20]:
+            with st.container(border=True):
+                study = (c.get("study") or {}).get("name") or "SCOPE standard"
+                who = f" by {c['by']}" if c.get("by") else ""
+                st.markdown(f"**{c['kind'].capitalize()}**{who} · {c['created'][:10]} · study: {study}")
+                said = c.get("scope_said") or {}
+                active = [f"{f['issue']} ({f['severity']})" for f in said.get("findings", [])
+                          if f.get("status") == "active"]
+                st.caption(f"SCOPE said: {str(said.get('risk') or '-').upper()} risk"
+                           + (f"; active: {', '.join(active)}" if active else "; no active findings"))
+                if c["kind"] == "correction":
+                    x = c["correction"]
+                    st.markdown("Reviewer says " + L.ruling_line(c, topics)[2:]
+                                + (f" Visit risk should be **{x['risk']}**." if x.get("risk") else ""))
+                with st.expander("Note"):
+                    st.text(c["note"])
+                scope_choice = L.ALL_STUDIES
+                if c["kind"] == "correction" and study != "SCOPE standard":
+                    pick = st.radio("Applies to", ["All studies", f"This study only ({study})"], horizontal=True,
+                                    key=f"to_{c['id']}")
+                    scope_choice = L.ALL_STUDIES if pick == "All studies" else study
+                why = st.text_input("Note for the record (optional)", key=f"why_{c['id']}")
+                b1, b2, _ = st.columns([1, 1, 3])
+                for approve, btn in ((True, b1.button("Approve", key=f"yes_{c['id']}", type="primary")),
+                                     (False, b2.button("Reject", key=f"no_{c['id']}"))):
+                    if btn:
+                        try:
+                            store.decide(c, approve=approve, applies_to=scope_choice, note=why)
+                        except L.LearningError as e:
+                            st.error(str(e))
+                            break
+                        _load_library.clear()
+                        st.rerun()
 
 
 def _profile_diff(old: dict, new: dict) -> str:
@@ -719,8 +891,8 @@ with st.sidebar:
                     "scores them with your study's rules, and flags anything it is unsure about for you to check.")
 
 parser = get_parser()
-tab_one, tab_batch, tab_check, tab_prof = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check",
-                                                   "Study setup"])
+tab_one, tab_batch, tab_check, tab_prof, tab_learn = st.tabs(
+    ["Analyze a note", "Portfolio view", "Accuracy check", "Study setup", "What SCOPE learned"])
 
 with tab_one:
     note = st.text_area("Site-visit note", key="note", height=230,
@@ -788,10 +960,17 @@ with tab_one:
                        "from the verified active findings "
                        f"with the study profile {prof_used.get('name', 'SCOPE standard')} "
                        f"(v{prof_used.get('version', '3.1')}).")
-            if rec.get("engine_log"):
+            learned = rec.get("learned_from") or []
+            if learned:
+                st.caption(f"SCOPE used {len(learned)} ruling{'s' if len(learned) > 1 else ''} it learned from "
+                           "reviewers on similar notes (see How this was read).")
+            if rec.get("engine_log") or learned:
                 with st.expander("How this was read"):
-                    st.markdown("\n".join(f"- {line}" for line in rec["engine_log"]))
-            correction_form(note, rec)
+                    st.markdown("\n".join(f"- {line}" for line in rec.get("engine_log", [])))
+                    if learned:
+                        st.markdown("**Rulings learned from reviewers, used for this note:**\n" + "\n".join(
+                            f"- {x['ruling']}" for x in learned))
+            feedback(note, rec)
         with t_note:
             st.markdown(highlight(note, rec), unsafe_allow_html=True)
         with t_act:
@@ -926,10 +1105,7 @@ with tab_check:
         unread: dict[str, Unreadable] = {}
         for i, r in enumerate(rows):
             try:
-                if r.get("study"):
-                    recs.append(analyze_under(r["text"], DM.profile(r["study"])))
-                else:
-                    recs.append(cached_llm("record", r["text"], lambda t=r["text"]: parser.analyze(t)))
+                recs.append(analyze_under(r["text"], DM.profile(r["study"]) if r.get("study") else None))
             except Unreadable as e:  # this note could not be read; carry on with the others
                 recs.append(None)
                 unread[r["id"]] = e
@@ -986,3 +1162,6 @@ with tab_check:
 
 with tab_prof:
     profile_editor()
+
+with tab_learn:
+    learned_tab()

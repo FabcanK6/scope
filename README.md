@@ -53,6 +53,7 @@ Protocols disagree on the things that decide risk: one defines an event as an SA
 4. The study lead rewords, re-grades or rejects each rule, then creates the study profile. Accepted rules carry their protocol citation (number, version, page), and the change is logged.
 5. Every visit for that study is then judged against its own protocol: the LLM is told that study rules override general practice and to work out elapsed time (calendar or business days) from the dates in the note.
 6. **Deadlines are counted by code, not by the AI.** Language models are unreliable at calendar arithmetic, so for topics with a reporting deadline (24 hours by default; e.g. 2 business days or 3 calendar days under a protocol) the model only copies the start date (e.g. site awareness) and the report date from the note. SCOPE checks both dates are in the note, counts calendar days, business days (Monday to Friday) or hours, and decides on time or late itself, overriding the model and saying so. With dates only, an hours deadline reported the next day is flagged as unclear rather than guessed.
+7. **The protocol sets the severity.** Study rules are numbered for the model. When a finding falls under a rule that states a severity ("a tumour assessment outside its window is an important deviation [major if broken]"), the model names the rule and SCOPE applies that rule's severity itself, so a model that under- or over-rates the finding is overruled by the protocol. The findings table shows which rule set the severity and its page.
 
 Five fictional demo studies ship with the app (see below) to try this with. Free-tier LLM requests may be used by the provider, so only use public (e.g. ClinicalTrials.gov) or fictional protocols until an enterprise LLM agreement is in place.
 
@@ -73,6 +74,27 @@ The Accuracy check runs all 15 demo notes, each under its own protocol. `scripts
 ### Your studies are remembered
 
 Set a study up once. A study profile built from your protocol, edited, or loaded from a file is saved automatically under **My studies** (★) in your browser, together with any corrections you approve. Next week or next quarter, pick it from the study list and score the new visit: no need to upload the protocol again. Nothing is stored on the server; download a copy to back it up or use it on another computer.
+
+### SCOPE learns from the people who use it
+
+SCOPE does not wait for a new release to get better. Under every result there are two ways to teach it:
+
+- **SCOPE got this right**: one click shares the note and SCOPE's reading.
+- **Disagree with SCOPE? Correct it**: say what the finding should be, with the words from the note and one line on why, and tick **Share it**.
+
+Shared cases wait for review. A curator approves or rejects each one (and decides whether a ruling applies to all studies or only to its own study). From the moment a correction is approved, SCOPE shows it to the AI model as a ruling whenever it reads a similar note, for every user. The **What SCOPE learned** tab lists every ruling in use, with when it was approved. Nothing changes SCOPE's judgement without a person approving it, and every case keeps who, when and why, the audit trail a sponsor would ask for. In the Accuracy check a note never sees a ruling made on that same note, so the score stays honest.
+
+Approved confirmations and corrections are also the labelled data for the next step: SCOPE's own model, retrained on them on a schedule and promoted only when it beats the current one on the expert-labelled notes. The curator view exports them (`scope_training.jsonl`).
+
+Only fictional or de-identified notes may be shared. The shared library is a private Hugging Face dataset; set it up in the app's secrets:
+
+```toml
+HF_TOKEN = "hf_..."                          # fine-grained token with write access to that one dataset only
+SCOPE_LEARNING_REPO = "your-name/scope-learning"
+SCOPE_CURATOR_KEY = "a passphrase only curators know"
+```
+
+Without these, SCOPE works as before and corrections improve each study only. For a local run, `SCOPE_LEARNING_DIR=/some/folder` keeps the library in a folder instead.
 
 ### Severity rubric (v3.2)
 
@@ -106,7 +128,7 @@ Every change is versioned and logged, and every result records the profile name,
 ## Setup (free Gemini API key)
 
 1. Create a free key at [aistudio.google.com](https://aistudio.google.com) (Get API key → Create API key).
-2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model. If a model is not available on the free tier, is overloaded (HTTP 503), or has used up its own free quota (HTTP 429; free quotas are per model and reset at midnight Pacific time), SCOPE moves on to the next model, so one busy or exhausted model does not stop the app.
+2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model. If a model is not available on the free tier, is overloaded (HTTP 503), too slow (no answer within 60 seconds), or has used up its own free quota (HTTP 429; free quotas are per model and reset at midnight Pacific time), SCOPE moves on to the next model, so one busy or exhausted model does not stop the app. Gemini 3 models are asked to think at a low level (`GEMINI_THINKING`, default `low`) so a reading takes seconds. Under every result, **How this was read** lists each model tried and what happened.
 3. Locally: `export GEMINI_API_KEY=...`, then `streamlit run app/streamlit_app.py` or `python -m scope.llm --file note.txt --letter`.
 
 **Bring your own key, any provider.** In the sidebar, visitors can keep the app's free Gemini engine or bring their own key for Google Gemini, OpenAI, Anthropic Claude, or any OpenAI-compatible service (Azure OpenAI, Mistral, Groq, OpenRouter, a local Ollama or vLLM server). SCOPE lists the provider's models to choose from. Keys stay in the browser session and are sent only to that provider; own keys are not capped. Every provider's answer goes through the same schema, quote verification, rubric scoring and safety net, and each result says which provider and model read it. Answers are constrained to SCOPE's schema with each provider's structured output feature (Gemini `responseSchema`, OpenAI strict `json_schema`, Anthropic `output_config`), with a plain-JSON fallback for services that lack it. Only send fictional or de-identified notes; real study data needs an enterprise agreement with the provider.
@@ -221,6 +243,7 @@ scope/
   profile.py           study profiles: editable rubric, study rules, escalation, user corrections
   protocol.py          protocol intake: read a protocol, draft cited study rules, build a profile
   deadlines.py         reporting deadlines counted from the note's dates (calendar, business days, hours)
+  learning.py          shared learning: shared cases, curator review, rulings used on similar notes
   demos.py             the five fictional demo studies (profiles/demos/)
   providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds

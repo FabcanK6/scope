@@ -107,6 +107,18 @@ class TestLLM(unittest.TestCase):
         self.assertTrue(verify_quote("violating the mandatory 24-hour protocol reporting window", NOTE))
         self.assertTrue(verify_quote("NO TEMPERATURE excursions were noted on the digital data logger.", NOTE))
         self.assertFalse(verify_quote("The PI refused to sign the delegation log.", NOTE))
+        # parts joined with an ellipsis (live: PED-44 status epilepticus finding was dropped over this)
+        self.assertTrue(verify_quote("The subject was hospitalized on August 30, 2026... violating the mandatory "
+                                     "24-hour protocol reporting window.", NOTE))
+        self.assertTrue(verify_quote("The subject was hospitalized on August 30, 2026 \u2026 No temperature "
+                                     "excursions were noted", NOTE))
+        self.assertFalse(verify_quote("No temperature excursions were noted... The subject was hospitalized",
+                                      NOTE))  # wrong order
+        self.assertFalse(verify_quote("The subject was hospitalized on August 30, 2026... and then died.", NOTE))
+        self.assertFalse(verify_quote("The... Sponsor", NOTE))  # pieces too short to mean anything
+        self.assertTrue(verify_quote("hospitalized ... violating the mandatory 24-hour", NOTE))
+        far = "The subject was hospitalized." + " Filler sentence." * 30 + " The site did not notify the Sponsor."
+        self.assertFalse(verify_quote("The subject was hospitalized... The site did not notify the Sponsor", far))
 
     def test_engine_verifies_and_scores(self):
         from scope.engine import LLMParser
