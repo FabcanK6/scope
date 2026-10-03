@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -120,6 +121,8 @@ class GeminiClient(LLMClient):
     retry_delays = (2.0, 5.0)  # waits before the 2nd and 3rd attempt on a busy model
     max_models = 6  # how many models to try before giving up
     time_budget = 150.0  # seconds: stop trying further models after this, so nobody waits for many minutes
+    # models whose free daily quota is used up, shared by every session of the app: key -> wall-clock time it resets
+    _exhausted: dict[str, float] = {}
     slow_for = 600.0  # seconds a model that timed out is tried last
 
     def __init__(self, api_key: str, model: str | None = None, timeout: int = 60):
@@ -193,9 +196,14 @@ class GeminiClient(LLMClient):
         order = list(dict.fromkeys(m for m in [self.model, self.preferred, *self._listed, "gemini-flash-latest"] if m))
         now = self._clock()
         slow = {m for m, t in self._slow.items() if now - t < self.slow_for}
-        last = self.avoid | slow
-        order = [m for m in order if m not in last] + [m for m in order if m in last]
+        later = self.avoid | slow
+        spent = {m for m in order if self._exhausted.get(self._quota_key(m), 0) > time.time()}
+        order = ([m for m in order if m not in later | spent] + [m for m in order if m in later - spent]
+                 + [m for m in order if m in spent])  # a model out of quota today is only tried as a last resort
         return order[: self.max_models]
+
+    def _quota_key(self, model: str) -> str:
+        return f"{hashlib.sha256(self.api_key.encode()).hexdigest()[:12]}:{model}"
 
     def _body_for(self, model: str, body: dict) -> dict:
         """Gemini 3 models get a low thinking level (see THINKING_LEVEL); older models keep their defaults."""
@@ -233,6 +241,8 @@ class GeminiClient(LLMClient):
                 self.trail.append(f"{model}: {_outcome(e)} after {self._clock() - t0:.0f} s")
                 if isinstance(e, ModelSlow):
                     self._slow[model] = self._clock()
+                if isinstance(e, QuotaExceeded) and e.per_day:
+                    GeminiClient._exhausted[self._quota_key(model)] = next_quota_reset()
                 if not isinstance(last, QuotaExceeded):  # report the quota problem if any model hit it
                     last = e
                 continue
@@ -276,6 +286,22 @@ ESCALATION_SUBJECTS = 3  # default profile: a problem affecting this many subjec
 def final_severity(f: dict, profile: dict | None = None) -> tuple[str, list[str]]:
     """Escalation for one finding under a profile (default: rubric v3.2). See ``scope.profile.final_severity``."""
     return _profile.final_severity(f, profile or _profile.default_profile())
+
+
+def next_quota_reset(now: float | None = None) -> float:
+    """Gemini's free daily quotas reset at midnight Pacific time: the next one, as a timestamp."""
+    import datetime as dt
+
+    now = time.time() if now is None else now
+    try:
+        from zoneinfo import ZoneInfo
+
+        tz = ZoneInfo("America/Los_Angeles")
+    except Exception:  # no time zone data: Pacific standard time is close enough
+        tz = dt.timezone(dt.timedelta(hours=-8))
+    local = dt.datetime.fromtimestamp(now, tz)
+    midnight = (local + dt.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight.timestamp()
 
 
 def _outcome(e: Exception) -> str:

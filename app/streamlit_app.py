@@ -526,6 +526,20 @@ def learned_tab() -> None:
                             break
                         _load_library.clear()
                         st.rerun()
+        if rulings_:
+            st.markdown("**Rulings in use.** Retire one when it no longer holds (a rubric change, a wrong call): "
+                        "SCOPE stops using it at once, and it stays in the record as retired.")
+            for c in reversed(rulings_):
+                r1, r2 = st.columns([5, 1])
+                r1.caption(L.ruling_line(c, topics)[2:])
+                if r2.button("Retire", key=f"retire_{c['id']}"):
+                    try:
+                        store.decide(c, approve=False, note="Retired by curator")
+                    except L.LearningError as e:
+                        st.error(str(e))
+                    else:
+                        _load_library.clear()
+                        st.rerun()
 
 
 def _profile_diff(old: dict, new: dict) -> str:
@@ -592,8 +606,8 @@ def protocol_review() -> None:
     """Review the rules drafted from a protocol and turn the accepted ones into a study profile."""
     pd_state = st.session_state.get("protocol_draft")
     if not pd_state:
-        st.info("To use your own study, choose **My own protocol** in the sidebar (step 1) and upload it. SCOPE drafts "
-                "the study's rules from it, each with the exact quote and page, and you review them here before "
+        st.info("To use your own study, choose **New study: upload its protocol** in the sidebar (step 1). SCOPE "
+                "drafts the study's rules from it, each with the exact quote and page, and you review them here before "
                 "anything is used. Or pick a demo study to see a finished profile.")
         return
     st.subheader("Rules drafted from the protocol")

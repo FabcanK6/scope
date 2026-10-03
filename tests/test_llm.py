@@ -28,6 +28,7 @@ def fake_response(payload) -> dict:
 class FakeClient(GeminiClient):
     def __init__(self, replies, models=("gemini-9-flash",)):
         super().__init__("test-key")
+        GeminiClient._exhausted.clear()  # shared across sessions in the app; fresh for every test
         self.replies = list(replies)
         self.models = list(models)
         self.calls = []
@@ -90,6 +91,19 @@ class TestSpeed(unittest.TestCase):
         with self.assertRaises(LLMError) as ctx:
             LLMParser(client).analyze(NOTE)
         self.assertIn("busy", ctx.exception.engine_log[-1])
+
+    def test_model_out_of_daily_quota_is_skipped_until_midnight_pacific(self):
+        from scope.llm import next_quota_reset
+
+        client = FakeClient([QuotaExceeded('"quotaId": "GenerateRequestsPerDayPerProjectPerModel"'),
+                             fake_response("ok"), fake_response("ok")], models=("gemini-9-flash", "gemini-8-flash"))
+        client.generate("s", "p")
+        other_session = GeminiClient("test-key")  # same key, new visitor: the spent model goes last
+        other_session._listed = ["gemini-9-flash", "gemini-8-flash"]
+        self.assertEqual(other_session.candidates()[:2], ["gemini-8-flash", "gemini-flash-latest"])
+        self.assertEqual(other_session.candidates()[-1], "gemini-9-flash")
+        # 23:30 Pacific (daylight time) on 3 Oct 2026 -> resets 30 minutes later
+        self.assertEqual(next_quota_reset(1791095400.0) - 1791095400.0, 1800.0)
 
     def test_time_budget(self):
         client = FakeClient([ModelSlow("timeout")] * 6, models=("gemini-9-flash", "gemini-8-flash", "gemini-7-flash"))

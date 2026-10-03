@@ -322,9 +322,9 @@ def output_problem(data, text: str) -> str | None:
     for v in values:
         if len(v) > 600 or (_FOREIGN.search(v) and not _FOREIGN.search(text)):
             return "garbled value"
-    for v in (data.get("visit") or {}).values():
+    for k, v in (data.get("visit") or {}).items():
         if isinstance(v, str) and (len(v) > 120 or (_RAMBLE.search(v) and _norm(v) not in _norm(text))):
-            return "reasoning inside a value"
+            return f"reasoning inside a value: {k} = \"{v[:60]}\""
     return None
 
 
