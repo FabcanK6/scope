@@ -1,0 +1,23 @@
+[
+  {
+    "id": "onc-210-1",
+    "title": "Hospitalized for progression",
+    "expected_risk": "low",
+    "why": "A hospitalization due only to disease progression is not an SAE under this protocol, and the scan was inside its window.",
+    "text": "Monitoring visit ONC-210, Site 21, 12 October 2026. Subject 21-007 was admitted on 2 October 2026 with worsening shortness of breath; the discharge summary attributes it to disease progression only, and the site recorded it as progression, not as an SAE. Her Week 12 CT scan was done 5 days after the scheduled date. All subjects are on the current ICF version. Vials stored at 2-8 C throughout."
+  },
+  {
+    "id": "onc-210-2",
+    "title": "Dosed with low neutrophils",
+    "expected_risk": "high",
+    "why": "Cycle 3 was given with an ANC of 0.8 x 10^9/L, which the protocol says must hold treatment: critical.",
+    "text": "ONC-210 / Site 34 / 07-Oct-2026\n- 34-002 received Cycle 3 rovanimab + carboplatin on 29-Sep with ANC 0.8 x 10^9/L (lab drawn same morning). PI says the result was not reviewed before dosing.\n- No infusion reactions.\n- Scans on schedule.\n- PI to report the dosing deviation to the sponsor and IRB by 9-Oct-2026."
+  },
+  {
+    "id": "onc-210-3",
+    "title": "Late scan",
+    "expected_risk": "medium",
+    "why": "A tumour assessment 11 days late is outside the \u00b17-day window: an important deviation (major).",
+    "text": "IMV, ONC-210, Site 40, 15 October 2026. Subject 40-005's Week 18 CT scan was performed 11 days after the scheduled date because the scanner was down. Everything else reviewed (consents, SAEs, drug accountability, storage logs) was in order. Site to document the late scan as a deviation."
+  }
+]

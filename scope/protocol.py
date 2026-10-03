@@ -45,9 +45,11 @@ PROTOCOL_SCHEMA = {
             "rule": {"type": "STRING"},
             "severity": {"type": "STRING", "enum": SEVERITY_OPTIONS},
             "quote": {"type": "STRING"},
-            "page": {"type": "INTEGER", "nullable": True}},
-            "required": ["topic", "rule", "severity", "quote", "page"],
-            "propertyOrdering": ["topic", "rule", "severity", "quote", "page"]}},
+            "page": {"type": "INTEGER", "nullable": True},
+            "deadline_amount": {"type": "NUMBER", "nullable": True},
+            "deadline_unit": {"type": "STRING", "enum": ["hours", "calendar_days", "business_days"], "nullable": True}},
+            "required": ["topic", "rule", "severity", "quote", "page", "deadline_amount", "deadline_unit"],
+            "propertyOrdering": ["topic", "rule", "severity", "quote", "page", "deadline_amount", "deadline_unit"]}},
     },
     "required": ["study", "rules"],
     "propertyOrdering": ["study", "rules"],
@@ -87,6 +89,8 @@ For each rule:
   default rubric. Use "definition" for rules that change what counts (e.g. "Disease progression is not an SAE").
 - "quote": the shortest sentence copied word for word from the protocol that shows the rule.
 - "page": the number from the nearest [Page N] marker before the quote.
+- "deadline_amount" and "deadline_unit": for a reporting deadline, the number and its unit exactly as the protocol
+  gives it (hours, calendar_days or business_days; "within 3 days" = 3 calendar_days); otherwise null.
 Only include rules that make the general rubric concrete or differ from it. Do not invent anything. At most 25 rules.
 Also fill "study" with the title, protocol number, version or amendment, phase and therapeutic area if stated."""
 
@@ -193,9 +197,16 @@ def draft_rules(client: GeminiClient, pages: list[str], profile: dict | None = N
             dropped += 1
             continue
         topic = str(r.get("topic") or GENERAL).upper()
+        deadline = None
+        try:
+            amount = float(r.get("deadline_amount")) if r.get("deadline_amount") is not None else None
+        except (TypeError, ValueError):
+            amount = None
+        if amount and r.get("deadline_unit") in ("hours", "calendar_days", "business_days"):
+            deadline = {"amount": int(amount) if amount.is_integer() else amount, "unit": r["deadline_unit"]}
         rules.append({"topic": topic if topic in codes else GENERAL, "rule": str(r.get("rule") or "").strip(),
                       "severity": r.get("severity") if r.get("severity") in SEVERITY_OPTIONS else "definition",
-                      "quote": quote, "page": page})
+                      "quote": quote, "page": page, "deadline": deadline})
     rules = [r for r in rules if r["rule"]]
     study = {k: (v or None) for k, v in (data.get("study") or {}).items()}
     return {"study": study, "rules": rules, "pages_read": len(keep), "pages_total": len(pages), "dropped": dropped}
@@ -219,6 +230,12 @@ def apply_rules(profile: dict, draft: dict, accepted: list[int], filename: str, 
         ref = f"{ref} {study['version']}"
     chosen = [draft["rules"][i] for i in accepted]
     new["study_rules"] = [*new["study_rules"], *(rule_line(r, ref) for r in chosen)]
+    for r in chosen:  # the protocol's own reporting deadlines replace the defaults for those topics
+        if r.get("deadline") and r["topic"] != GENERAL:
+            sev = r["severity"] if r["severity"] in ("minor", "major", "critical") else "critical"
+            new["deadlines"] = [d for d in new.get("deadlines", []) if d["topic"] != r["topic"]] + [
+                {"topic": r["topic"], **r["deadline"], "severity": sev, "what": r["rule"],
+                 "source": f"protocol {ref}, p. {r['page']}"}]
     new["protocol"] = {"file": filename, "reference": ref, "title": study.get("title"),
                        "phase": study.get("phase"), "therapeutic_area": study.get("therapeutic_area"),
                        "rules": chosen}

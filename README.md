@@ -52,8 +52,27 @@ Protocols disagree on the things that decide risk: one defines an event as an SA
 3. SCOPE checks every rule's quote against the protocol text and finds its page; rules whose quote is not in the protocol are dropped.
 4. The study lead rewords, re-grades or rejects each rule, then creates the study profile. Accepted rules carry their protocol citation (number, version, page), and the change is logged.
 5. Every visit for that study is then judged against its own protocol: the LLM is told that study rules override general practice and to work out elapsed time (calendar or business days) from the dates in the note.
+6. **Deadlines are counted by code, not by the AI.** Language models are unreliable at calendar arithmetic, so for topics with a reporting deadline (24 hours by default; e.g. 2 business days or 3 calendar days under a protocol) the model only copies the start date (e.g. site awareness) and the report date from the note. SCOPE checks both dates are in the note, counts calendar days, business days (Monday to Friday) or hours, and decides on time or late itself, overriding the model and saying so. With dates only, an hours deadline reported the next day is flagged as unclear rather than guessed.
 
-`profiles/example_protocol_ZLV-301.pdf` is a short fictional protocol to try this with. Free-tier LLM requests may be used by the provider, so only use public (e.g. ClinicalTrials.gov) or fictional protocols until an enterprise LLM agreement is in place.
+Five fictional demo studies ship with the app (see below) to try this with. Free-tier LLM requests may be used by the provider, so only use public (e.g. ClinicalTrials.gov) or fictional protocols until an enterprise LLM agreement is in place.
+
+### Try it in two clicks: demo studies
+
+Pick a study in the sidebar, then a note. Five fictional studies ship with SCOPE, each with a short protocol PDF, a ready-made study profile whose rules quote the protocol (with page numbers), and three example notes with the verdict a reviewer would expect:
+
+| Study | Area | What it shows |
+|---|---|---|
+| ZLV-301 | Dermatology (oral tablets) | SAEs within 2 business days; elective pre-planned hospitalizations are not SAEs; a Week 16 visit 6 days late is inside its ±7-day window |
+| ONC-210 | Oncology (IV infusion) | Hospitalization for disease progression is not an SAE; dosing with low neutrophils is critical; scans every 6 weeks ±7 days |
+| VAX-118 | Vaccines | Cold chain: doses given after an unreported fridge excursion; the Day 29 immunogenicity sample is key |
+| CRD-07 | Medical device | SAEs and device deficiencies within 3 calendar days (the default 24 hours would call the same report late); only trained implanters |
+| PED-44 | Pediatrics | Parent consent plus child assent from age 7; weight-based dosing; status epilepticus is always an SAE |
+
+The Accuracy check runs all 15 demo notes, each under its own protocol. `scripts/make_demo_studies.py` rebuilds the demos and fails if any rule's quote is not in its protocol.
+
+### Your studies are remembered
+
+Set a study up once. A study profile built from your protocol, edited, or loaded from a file is saved automatically under **My studies** (★) in your browser, together with any corrections you approve. Next week or next quarter, pick it from the study list and score the new visit: no need to upload the protocol again. Nothing is stored on the server; download a copy to back it up or use it on another computer.
 
 ### Severity rubric (v3.2)
 
@@ -82,7 +101,7 @@ Monitoring standards change with the protocol, the study and the sponsor, so the
 - **Escalation and thresholds**: how many subjects make a problem widespread, how far that raises it, whether repeats escalate, and the points for medium and high risk.
 - **Learning from corrections**: any user can correct a result ("this should be minor, because..."). Once the study lead approves a correction, SCOPE shows it to the LLM as an example whenever it reads a similar note, so it adapts to the study without retraining. Notes with corrections can be re-checked in the Accuracy check.
 
-Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are saved and shared as JSON files (`profiles/example_oncology_study.json` is an example). The default profile, **SCOPE standard**, is rubric v3.2 below.
+Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are kept in the user's browser under **My studies** and can be downloaded as JSON files to back up, share or move to another computer. The default profile, **SCOPE standard**, is rubric v3.2 below.
 
 ## Setup (free Gemini API key)
 
@@ -201,6 +220,8 @@ scope/
   record.py            visit record, date and count normalization, audit summary
   profile.py           study profiles: editable rubric, study rules, escalation, user corrections
   protocol.py          protocol intake: read a protocol, draft cited study rules, build a profile
+  deadlines.py         reporting deadlines counted from the note's dates (calendar, business days, hours)
+  demos.py             the five fictional demo studies (profiles/demos/)
   providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds
   search.py            similar past visits (TF-IDF; embeddings optional)

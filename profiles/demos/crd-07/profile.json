@@ -1,7 +1,7 @@
 {
-  "name": "Example - Phase II oncology study",
+  "name": "Demo · Medical device · CRD-07 (pivotal)",
   "version": "1",
-  "description": "Example study profile built on SCOPE standard v3.2 (fictional study).",
+  "description": "Implanted device. SAEs and device deficiencies within 3 calendar days; only trained, listed implanters; serial numbers tracked.",
   "topics": [
     {
       "code": "SAE_REPORTING",
@@ -163,7 +163,7 @@
       "minor": "slightly behind target",
       "major": "far behind target",
       "critical": "",
-      "enabled": false
+      "enabled": true
     },
     {
       "code": "REG_DOCS",
@@ -200,21 +200,13 @@
       "major": "unresponsive for weeks; repeated visit cancellations",
       "critical": "",
       "enabled": true
-    },
-    {
-      "code": "STUDY_IMAGING_QC",
-      "group": "Study-specific",
-      "display": "Imaging quality and transfer",
-      "minor": "a scan uploaded late to the central reader",
-      "major": "scans rejected by the central reader for quality; scans not uploaded within 14 days",
-      "critical": "",
-      "enabled": true
     }
   ],
   "study_rules": [
-    "A missed Cycle 1 Day 1 PK sample is critical (PROTOCOL_DEVIATION).",
-    "Tumour assessments (RECIST scans) more than 7 days outside their scheduled week are major (PROTOCOL_DEVIATION).",
-    "Visit windows are plus or minus 3 days; a visit 1-3 days off schedule is not a deviation."
+    "An implant performed by a physician who is not trained and listed is an important protocol deviation. [STAFF_TURNOVER, critical if broken] (protocol CRD-07 Revision C, p. 2)",
+    "The serial number of every device received, implanted, explanted or returned must be recorded in the device accountability log. [IP_ACCOUNTABILITY, major if broken] (protocol CRD-07 Revision C, p. 3)",
+    "Follow-up visits take place at 3, 6 and 12 months after implant, each within plus or minus 14 days. [PROTOCOL_DEVIATION, minor if broken] (protocol CRD-07 Revision C, p. 4)",
+    "Serious adverse events and device deficiencies that could have led to a serious adverse event must be reported to the sponsor within 3 calendar days of the site becoming aware of them. [SAE_REPORTING, critical if broken] (protocol CRD-07 Revision C, p. 5)"
   ],
   "escalation": {
     "subjects_threshold": 3,
@@ -225,12 +217,70 @@
     "medium": 3,
     "high": 6
   },
+  "deadlines": [
+    {
+      "topic": "SAE_REPORTING",
+      "amount": 3,
+      "unit": "calendar_days",
+      "severity": "critical",
+      "what": "Serious adverse events and device deficiencies that could have led to a serious adverse event must be reported to the sponsor within 3 calendar days of the site becoming aware of them.",
+      "source": "protocol CRD-07 Revision C, p. 5"
+    }
+  ],
   "corrections": [],
   "changes": [
     {
       "date": "2026-10-03",
-      "by": "Example",
-      "change": "Created from SCOPE standard v3.2: 3 study rules, enrollment off, imaging topic added"
+      "by": "SCOPE demo",
+      "change": "Built from fictional protocol CRD-07 Revision C: 4 rules"
     }
-  ]
+  ],
+  "protocol": {
+    "file": "protocol.pdf",
+    "reference": "CRD-07 Revision C",
+    "title": "A Prospective, Multicentre Pivotal Study of the HeartLoop Implantable Cardiac Monitor",
+    "phase": "Pivotal (device)",
+    "therapeutic_area": "Cardiology",
+    "rules": [
+      {
+        "topic": "STAFF_TURNOVER",
+        "rule": "An implant performed by a physician who is not trained and listed is an important protocol deviation.",
+        "severity": "critical",
+        "quote": "An implant performed by a physician who is not trained and listed is an important protocol deviation.",
+        "page": 2,
+        "deadline": null
+      },
+      {
+        "topic": "IP_ACCOUNTABILITY",
+        "rule": "The serial number of every device received, implanted, explanted or returned must be recorded in the device accountability log.",
+        "severity": "major",
+        "quote": "The serial number of every device received, implanted, explanted or returned must be recorded in the device accountability log.",
+        "page": 3,
+        "deadline": null
+      },
+      {
+        "topic": "PROTOCOL_DEVIATION",
+        "rule": "Follow-up visits take place at 3, 6 and 12 months after implant, each within plus or minus 14 days.",
+        "severity": "minor",
+        "quote": "Follow-up visits take place at 3, 6 and 12 months after implant, each within plus or minus 14 days.",
+        "page": 4,
+        "deadline": null
+      },
+      {
+        "topic": "SAE_REPORTING",
+        "rule": "Serious adverse events and device deficiencies that could have led to a serious adverse event must be reported to the sponsor within 3 calendar days of the site becoming aware of them.",
+        "severity": "critical",
+        "quote": "Serious adverse events and device deficiencies that could have led to a serious adverse event must be reported to the sponsor within 3 calendar days of the site becoming aware of them.",
+        "page": 5,
+        "deadline": {
+          "amount": 3,
+          "unit": "calendar_days"
+        }
+      }
+    ]
+  },
+  "demo": {
+    "id": "crd-07",
+    "label": "Medical device · CRD-07 (pivotal)"
+  }
 }

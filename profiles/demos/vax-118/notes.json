@@ -1,0 +1,23 @@
+[
+  {
+    "id": "vax-118-1",
+    "title": "Diary gaps, visit inside window",
+    "expected_risk": "low",
+    "why": "One subject completed the diary on 4 of 7 days (minor); a Day 29 visit on Day 31 is inside the \u00b13-day window.",
+    "text": "Hi team, notes from the VAX-118 visit at Site 7 on 9 October 2026. Subject 07-044 completed her e-diary on only 4 of the 7 days; she was retrained during the visit. Subject 07-051 attended his Day 29 visit on Day 31. All Day 1 and Day 29 blood samples were collected. Fridge logs 2-8 C, no excursions. No SAEs. Thanks, Ana"
+  },
+  {
+    "id": "vax-118-2",
+    "title": "Doses given after a fridge excursion",
+    "expected_risk": "high",
+    "why": "Doses from a fridge that reached 11 C were given before any sponsor decision: critical.",
+    "text": "VAX-118 IMV, Site 15, 13 Oct 2026. Clinic fridge reached 11 C for about 5 hours on 6 Oct (power cut). The excursion was not reported and the doses were not quarantined. Three subjects (15-020, 15-021, 15-022) were vaccinated from that fridge on 7 Oct. Site to report the excursion and the three administrations to the sponsor today."
+  },
+  {
+    "id": "vax-118-3",
+    "title": "Missed Day 29 sample",
+    "expected_risk": "medium",
+    "why": "The Day 29 immunogenicity sample is the primary endpoint; missing it is an important deviation (major).",
+    "text": "Visit report VAX-118, Site 22, 16 October 2026. Subject 22-013's Day 29 blood sample was not collected because the lab kit had expired; the visit itself was on time. Diaries complete for all subjects. No excursions, no SAEs. Lab coordinator to check kit expiry dates weekly."
+  }
+]

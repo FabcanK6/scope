@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scope import profile as P  # noqa: E402
+from scope import demos as DM  # noqa: E402
 from scope import protocol as PR  # noqa: E402
 from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
@@ -113,14 +114,14 @@ def shared_cache() -> dict:
     return {}
 
 
-def _cache_key(kind: str, text: str) -> str:
+def _cache_key(kind: str, text: str, profile: dict | None = None) -> str:
     fp = hashlib.sha256((api_key() or "").encode()).hexdigest()[:12]
-    prof = P.fingerprint(current_profile())
+    prof = P.fingerprint(profile or current_profile())
     return f"{kind}:{ENGINE_VERSION}:{prof}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
-def cached_llm(kind: str, text: str, fn):
-    cache, key = shared_cache(), _cache_key(kind, text)
+def cached_llm(kind: str, text: str, fn, profile: dict | None = None):
+    cache, key = shared_cache(), _cache_key(kind, text, profile)
     hit = cache.get(key)
     if hit and time.time() - hit[0] < 24 * 3600:
         return hit[1]
@@ -138,6 +139,103 @@ def get_index():
     from scope.search import NoteIndex
 
     return NoteIndex(read_jsonl(CORPUS), backend="tfidf")
+
+
+GENERAL_STUDY = "General: no protocol (SCOPE standard)"
+OWN_STUDY = "New study: upload its protocol"
+MY_PREFIX = "★ "
+DEMO_BY_LABEL = {s["label"]: s for s in DM.index()}
+
+try:  # keeps "My studies" in the user's own browser between visits (no accounts, nothing stored on the server)
+    from streamlit_js_eval import streamlit_js_eval as _browser_js
+except Exception:  # pragma: no cover - the app still works; studies then last for the session only
+    _browser_js = None
+BROWSER_KEY = "scope.studies.v1"
+
+
+def my_studies() -> dict[str, dict]:
+    if "my_studies" not in st.session_state:
+        st.session_state["my_studies"] = {}
+    return st.session_state["my_studies"]
+
+
+def study_choices() -> list[str]:
+    return [GENERAL_STUDY, *(MY_PREFIX + n for n in my_studies()), *DEMO_BY_LABEL, OWN_STUDY]
+
+
+def remember_study(prof: dict, replaces: str | None = None) -> None:
+    """Keep a study in "My studies" (saved in this browser) and select it on the next run."""
+    if replaces and replaces != prof["name"]:
+        my_studies().pop(replaces, None)
+    my_studies()[prof["name"]] = prof
+    st.session_state["profile"] = prof
+    st.session_state["pending_study"] = MY_PREFIX + prof["name"]
+
+
+def browser_sync() -> None:
+    """Load saved studies from the browser once, then save them whenever they change."""
+    if _browser_js is None:
+        return
+    if not st.session_state.get("studies_loaded"):
+        raw = _browser_js(js_expressions=f"localStorage.getItem('{BROWSER_KEY}') || '{{}}'", key="scope_ls_read")
+        if raw is None:  # the browser has not answered yet
+            return
+        try:
+            saved = json.loads(raw).get("studies", {})
+        except (ValueError, AttributeError):
+            saved = {}
+        loaded = {}
+        for name, prof in saved.items():
+            try:
+                loaded[name] = P.validate(prof)
+            except P.ProfileError:
+                continue
+        st.session_state["my_studies"] = {**loaded, **my_studies()}
+        st.session_state["studies_loaded"] = True
+        st.session_state["studies_saved"] = hashlib.sha256(json.dumps({"studies": loaded}).encode()).hexdigest()
+        if loaded:
+            st.rerun()
+    payload = json.dumps({"studies": my_studies()})
+    digest = hashlib.sha256(payload.encode()).hexdigest()
+    if st.session_state.get("studies_saved") != digest:
+        _browser_js(js_expressions=f"localStorage.setItem('{BROWSER_KEY}', {json.dumps(payload)}); 'saved'",
+                    key=f"scope_ls_write_{digest[:12]}")
+        st.session_state["studies_saved"] = digest
+
+
+def chosen_demo() -> dict | None:
+    return DEMO_BY_LABEL.get(st.session_state.get("study_choice", GENERAL_STUDY))
+
+
+def note_choices() -> dict[str, dict]:
+    """Example notes for the chosen study: its demo notes, or the general examples."""
+    demo = chosen_demo()
+    if demo:
+        return {n["title"]: n for n in DM.notes(demo["id"])}
+    return {label: {"text": text} for label, text in examples().items()}
+
+
+def select_study() -> None:
+    choice = st.session_state.get("study_choice", GENERAL_STUDY)
+    demo = DEMO_BY_LABEL.get(choice)
+    if demo:
+        st.session_state["profile"] = DM.profile(demo["id"])
+    elif choice.startswith(MY_PREFIX) and choice[len(MY_PREFIX):] in my_studies():
+        st.session_state["profile"] = my_studies()[choice[len(MY_PREFIX):]]
+    elif choice == GENERAL_STUDY:
+        st.session_state["profile"] = P.default_profile()
+    st.session_state["example_pick"] = None
+    st.session_state.pop("expected", None)
+
+
+def analyze_under(text: str, prof: dict) -> dict:
+    """Score a note under a given study profile (used for demo notes in the accuracy check)."""
+    saved = parser.profile
+    parser.profile = prof
+    try:
+        return cached_llm("record", text, lambda: parser.analyze(text), profile=prof)
+    finally:
+        parser.profile = saved
 
 
 @st.cache_data
@@ -270,6 +368,8 @@ def _profile_diff(old: dict, new: dict) -> str:
         parts.append(f"study rules now {len(new['study_rules'])}")
     if old["escalation"] != new["escalation"]:
         parts.append("escalation settings changed")
+    if old.get("deadlines") != new.get("deadlines"):
+        parts.append("reporting deadlines changed")
     if old["thresholds"] != new["thresholds"]:
         parts.append(f"risk thresholds medium {new['thresholds']['medium']}, high {new['thresholds']['high']}")
     oa = sum(bool(c.get("approved")) for c in old["corrections"])
@@ -281,10 +381,6 @@ def _profile_diff(old: dict, new: dict) -> str:
     return "; ".join(parts)
 
 
-EXAMPLE_PROTOCOL = ROOT / "profiles" / "example_protocol_ZLV-301.pdf"
-EXAMPLE_PROFILE = ROOT / "profiles" / "example_oncology_study.json"
-
-
 def sidebar_protocol() -> None:
     """Upload a protocol in the sidebar; the drafted rules are reviewed in the Study setup tab."""
     upload = st.file_uploader("Upload the protocol (PDF, Word or text)", type=["pdf", "docx", "txt"],
@@ -293,8 +389,6 @@ def sidebar_protocol() -> None:
                               "before anything is used.")
     source = (upload.name, upload.getvalue()) if upload is not None else None
     go = source is not None and st.button("Read the protocol", type="primary", width="stretch")
-    if EXAMPLE_PROTOCOL.exists() and st.button("Try the example protocol (fictional)", width="stretch"):
-        source, go = (EXAMPLE_PROTOCOL.name, EXAMPLE_PROTOCOL.read_bytes()), True
     st.caption("Only public (e.g. ClinicalTrials.gov) or fictional protocols on the free engine.")
     if go and source:
         if not parser_for_sidebar():
@@ -323,16 +417,14 @@ def protocol_review() -> None:
     """Review the rules drafted from a protocol and turn the accepted ones into a study profile."""
     pd_state = st.session_state.get("protocol_draft")
     if not pd_state:
-        st.info("Upload the study protocol in the sidebar (step 1). SCOPE drafts the study's rules from it, each with "
-                "the exact quote and page, and you review them here before anything is used.")
+        st.info("To use your own study, choose **My own protocol** in the sidebar (step 1) and upload it. SCOPE drafts "
+                "the study's rules from it, each with the exact quote and page, and you review them here before "
+                "anything is used. Or pick a demo study to see a finished profile.")
         return
     st.subheader("Rules drafted from the protocol")
-    presets = {"SCOPE standard": "standard", "The current profile": "current"}
-    if EXAMPLE_PROFILE.exists():
-        presets["Example oncology profile"] = "example"
+    presets = {"SCOPE standard": P.default_profile, "The current profile": current_profile}
     base_choice = st.selectbox("Add the accepted rules to", list(presets), key="pr_base")
-    base = {"standard": P.default_profile, "current": current_profile,
-            "example": lambda: P.loads(EXAMPLE_PROFILE.read_text())}[presets[base_choice]]()
+    base = presets[base_choice]()
     draft = pd_state["draft"]
     study = draft["study"]
     st.markdown(f"**{study.get('protocol_number') or pd_state['file']}** "
@@ -367,10 +459,10 @@ def protocol_review() -> None:
             return
         new = PR.apply_rules(base, {**draft, "rules": rules}, accepted, pd_state["file"], who=who.strip(),
                              new_name=name.strip() or None)
-        st.session_state["profile"] = new
+        remember_study(new)
         st.session_state.pop("protocol_draft", None)
-        st.success(f"Created {new['name']} v{new['version']} with {len(accepted)} protocol rules. Every visit is now "
-                   "scored against this protocol. Download the profile to keep it.")
+        st.success(f"Created {new['name']} v{new['version']} with {len(accepted)} protocol rules. It is saved under "
+                   "My studies (★) in this browser: pick it next time, no upload needed.")
         st.rerun()
 
 
@@ -425,6 +517,22 @@ def profile_editor() -> None:
     high = e5.number_input("Points for high risk", 2, 60, th["high"], key="pf_high")
     st.caption("Points: minor 1, major 3, critical 6, worst finding per topic.")
 
+    st.subheader("Reporting deadlines")
+    st.caption("SCOPE counts these itself from the dates in each note (business days are Monday to Friday). A "
+               "protocol's own deadlines replace the defaults when you accept them.")
+    code_to_name = {t["code"]: t["display"] for t in prof["topics"]}
+    name_to_code = {v: k for k, v in code_to_name.items()}
+    dl_df = pd.DataFrame([{"Topic": code_to_name.get(d["topic"], d["topic"]), "Within": d["amount"],
+                           "Unit": d["unit"].replace("_", " "), "Late counts as": d["severity"],
+                           "Source": d.get("source", "")} for d in prof.get("deadlines", [])],
+                         columns=["Topic", "Within", "Unit", "Late counts as", "Source"])
+    edited_dl = st.data_editor(
+        dl_df, key="pf_deadlines", num_rows="dynamic", hide_index=True, width="stretch",
+        column_config={"Topic": st.column_config.SelectboxColumn(options=list(name_to_code)),
+                       "Within": st.column_config.NumberColumn(min_value=0.5, step=0.5),
+                       "Unit": st.column_config.SelectboxColumn(options=["hours", "calendar days", "business days"]),
+                       "Late counts as": st.column_config.SelectboxColumn(options=P.SEVERITIES)})
+
     st.subheader("Corrections")
     edited_corr = None
     if prof["corrections"]:
@@ -461,6 +569,13 @@ def profile_editor() -> None:
         new["study_rules"] = [x.strip() for x in rules.splitlines() if x.strip()]
         new["escalation"] = {"subjects_threshold": int(n_subj), "subjects_max": cap, "repeat": bool(rep_on)}
         new["thresholds"] = {"medium": int(med), "high": int(high)}
+        new["deadlines"] = [
+            {"topic": name_to_code.get(r["Topic"], r["Topic"]), "amount": r["Within"],
+             "unit": str(r["Unit"] or "").replace(" ", "_"), "severity": r["Late counts as"] or "critical",
+             "what": next((d.get("what", "") for d in prof.get("deadlines", [])
+                           if code_to_name.get(d["topic"]) == r["Topic"]), ""),
+             "source": r.get("Source") or "edited in SCOPE"}
+            for _, r in edited_dl.iterrows() if r.get("Topic") and r.get("Within")]
         if edited_corr is not None:
             kept = []
             quotes = list(edited_corr["Quote"])
@@ -482,8 +597,8 @@ def profile_editor() -> None:
             new["name"] = "SCOPE standard (customised)"  # the standard itself never changes silently
         new["version"] = P.bump_version(prof["version"])
         P.log_change(new, summary, who=who.strip())
-        st.session_state["profile"] = new
-        st.success(f"Saved as version {new['version']}: {summary}. Download the profile to keep it.")
+        remember_study(new, replaces=prof["name"])
+        st.success(f"Saved as version {new['version']}: {summary}. Saved under My studies (★) in this browser.")
         st.rerun()
     if b2.button("Start over from SCOPE standard"):
         st.session_state["profile"] = P.default_profile()
@@ -502,30 +617,61 @@ st.caption("Site Communication & Oversight Processing Engine · reads free-text 
 def load_example_note() -> None:
     choice = st.session_state.get("example_pick")
     if choice:
-        st.session_state["note"] = examples()[choice]
+        picked = note_choices()[choice]
+        st.session_state["note"] = picked["text"]
+        if "expected_risk" in picked:
+            st.session_state["expected"] = picked
+        else:
+            st.session_state.pop("expected", None)
 
 
 with st.sidebar:
     # 1. the study: protocol first, everything else is judged against it
+    browser_sync()
+    if "pending_study" in st.session_state:  # a study was just created or saved: select it
+        st.session_state["study_choice"] = st.session_state.pop("pending_study")
+    if st.session_state.get("study_choice", GENERAL_STUDY) not in study_choices():  # e.g. browser data cleared
+        st.session_state["study_choice"] = GENERAL_STUDY
+    st.markdown("**1 · Which study?**")
+    st.selectbox("Which study?", study_choices(), key="study_choice", on_change=select_study,
+                 label_visibility="collapsed")
+    demo = chosen_demo()
+    choice = st.session_state.get("study_choice", GENERAL_STUDY)
+    if choice.startswith(MY_PREFIX):
+        mine = current_profile()
+        n_rules = len(mine.get("protocol", {}).get("rules", [])) if mine.get("protocol") else len(mine["study_rules"])
+        st.caption(f"Your study, saved in this browser · v{mine['version']} · {n_rules} protocol rules. Pick it any "
+                   "time to score new visits; no need to upload the protocol again.")
+    elif demo:
+        st.caption(demo["summary"] + " (Fictional demo study.)")
+        st.download_button("Read its protocol (PDF)", DM.protocol_path(demo["id"]).read_bytes(),
+                           f"{demo['id']}-protocol.pdf", "application/pdf", width="stretch")
+    elif st.session_state.get("study_choice") == OWN_STUDY:
+        sidebar_protocol()
+    else:
+        st.caption("Scores notes with SCOPE's standard rubric. Pick a demo study or upload a protocol to score by a "
+                   "study's own rules.")
     prof = current_profile()
-    st.markdown("**1 · Study protocol**")
     st.caption(f"Scoring with **{prof['name']}** (v{prof['version']}).")
-    sidebar_protocol()
     with st.expander("Saved study profiles"):
         up = st.file_uploader("Load a profile (.json)", type=["json"], key="profile_upload")
         if up is not None and st.session_state.get("profile_file_id") != up.file_id:
             st.session_state["profile_file_id"] = up.file_id
             try:
-                st.session_state["profile"] = P.loads(up.getvalue().decode("utf-8"))
+                remember_study(P.loads(up.getvalue().decode("utf-8")))
                 st.rerun()
             except (P.ProfileError, UnicodeDecodeError) as e:
                 st.error(f"Could not load that profile: {e}")
-        if EXAMPLE_PROFILE.exists() and st.button("Use the example oncology profile", width="stretch"):
-            st.session_state["profile"] = P.loads(EXAMPLE_PROFILE.read_text())
-            st.rerun()
         st.download_button("Download this profile", P.dumps(prof), f"{prof['name']} v{prof['version']}.json",
                            "application/json", width="stretch")
-        st.caption("Profiles last for this browser session. Download yours to keep it.")
+        if choice.startswith(MY_PREFIX) and st.button("Remove this study from this browser", width="stretch"):
+            my_studies().pop(choice[len(MY_PREFIX):], None)
+            st.session_state["pending_study"] = GENERAL_STUDY
+            st.session_state["profile"] = P.default_profile()
+            st.rerun()
+        st.caption("Your studies are kept in this browser. Download a copy to back it up, share it with a colleague, "
+                   "or use it on another computer (load it above)." if _browser_js else
+                   "Studies last for this browser session. Download yours to keep it, and load it next time.")
     st.divider()
 
     # 2. the AI engine
@@ -559,8 +705,8 @@ with st.sidebar:
     st.divider()
 
     # 3. example notes
-    st.markdown("**3 · Try an example note**")
-    st.selectbox("Example notes", list(examples()), index=None, placeholder="Choose an example...",
+    st.markdown("**3 · Try a note**")
+    st.selectbox("Example notes", list(note_choices()), index=None, placeholder="Choose an example note...",
                  key="example_pick", on_change=load_example_note, label_visibility="collapsed")
     st.caption("All notes, sites and people in this app are fictional. Only use fictional or de-identified notes: "
                "they are sent to the AI provider you choose.")
@@ -595,6 +741,13 @@ with tab_one:
         c4.metric("Visit type", v["visit_type"]["code"] or "-")
         for alert in rec.get("alerts", []):
             st.error("**Safety check:** " + alert)
+        for check in rec.get("checks", []):
+            st.info("**Deadline check:** " + check)
+        expected = st.session_state.get("expected")
+        if expected and expected.get("text") == note:
+            agrees = expected["expected_risk"] == rec["risk"]["level"]
+            st.caption(f"{'Matches' if agrees else 'Differs from'} what a reviewer would expect for this demo note: "
+                       f"**{expected['expected_risk'].upper()}**. {expected['why']}")
         if rec.get("summary"):
             st.markdown(f"> {rec['summary']}")
         others = [r for r in rec["review"]["reasons"] if r not in rec.get("alerts", [])]
@@ -747,7 +900,8 @@ with tab_check:
                 "Formal visit reports (7)": load_realistic(), "Hand-written notes 1-8": hw[:8],
                 "Hand-written notes 9-16": hw[8:16], "Hand-written notes 17-24": hw[16:24]}
 
-    sets = dict(labelled_sets())
+    sets = {f"Demo studies ({len(DM.labelled_rows())} notes, each under its own protocol)": DM.labelled_rows(),
+            **labelled_sets()}
     corrected = [c for c in current_profile()["corrections"] if c.get("cra_risk") and c.get("note")]
     if corrected:
         unique = list({c["note"]: c for c in corrected}.values())
@@ -764,7 +918,10 @@ with tab_check:
         unread: dict[str, Unreadable] = {}
         for i, r in enumerate(rows):
             try:
-                recs.append(cached_llm("record", r["text"], lambda t=r["text"]: parser.analyze(t)))
+                if r.get("study"):
+                    recs.append(analyze_under(r["text"], DM.profile(r["study"])))
+                else:
+                    recs.append(cached_llm("record", r["text"], lambda t=r["text"]: parser.analyze(t)))
             except Unreadable as e:  # this note could not be read; carry on with the others
                 recs.append(None)
                 unread[r["id"]] = e
@@ -812,6 +969,8 @@ with tab_check:
                 if rec is None or r["risk"] == rec["risk"]["level"]:
                     continue
                 with st.expander(f"{r['id']}: expert said {r['risk']}, SCOPE said {rec['risk']['level']}"):
+                    if r.get("why"):
+                        st.caption(f"Expected: {r['why']}")
                     st.text(r["text"])
                     st.dataframe(findings_table(rec, "active"), hide_index=True, width="stretch")
                     st.caption("Who is right? If the label looks wrong to you, tell us; if SCOPE is wrong, this "

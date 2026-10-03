@@ -8,7 +8,7 @@ from scope import protocol as PR
 from scope.engine import LLMParser, build_system
 from tests.test_llm import FakeClient, fake_response
 
-EXAMPLE_PDF = Path(__file__).resolve().parents[1] / "profiles" / "example_protocol_ZLV-301.pdf"
+EXAMPLE_PDF = Path(__file__).resolve().parents[1] / "profiles" / "demos" / "zlv-301" / "protocol.pdf"
 
 PAGES = [
     "Protocol ZLV-301, Amendment 2 (Version 3.0). A Phase III study in plaque psoriasis.",
@@ -52,7 +52,7 @@ class TestProtocol(unittest.TestCase):
         except ImportError:
             self.skipTest("pypdf not installed")
         pages = PR.read_document(EXAMPLE_PDF.name, EXAMPLE_PDF.read_bytes())
-        self.assertEqual(len(pages), 6)
+        self.assertEqual(len(pages), 5)
         self.assertTrue(PR.verify_quote("within 2 business days of the site becoming aware of the event",
                                         pages[4]))
 

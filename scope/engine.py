@@ -17,6 +17,7 @@ import json
 import re
 import time
 
+from scope import deadlines as DL
 from scope import profile as _profile
 from scope.llm import SEVERITIES, STATUSES, BadAnswer, GeminiClient, LLMError, _norm, verify_quote
 from scope.record import build_record, normalize_date
@@ -40,11 +41,14 @@ EXTRACT_SCHEMA = {
             "repeat": {"type": "BOOLEAN"},
             "subjects_affected": {"type": "INTEGER", "nullable": True},
             "site_wide": {"type": "BOOLEAN"},
-            "escalation_evidence": {"type": "STRING"}},
+            "escalation_evidence": {"type": "STRING"},
+            "clock_start": _STR,
+            "reported_on": _STR},
             "required": ["issue", "status", "severity", "evidence", "explanation", "repeat", "subjects_affected",
-                         "site_wide", "escalation_evidence"],
+                         "site_wide", "escalation_evidence", "clock_start", "reported_on"],
             "propertyOrdering": ["issue", "status", "severity", "evidence", "explanation", "repeat",
-                                 "subjects_affected", "site_wide", "escalation_evidence"]}},
+                                 "subjects_affected", "site_wide", "escalation_evidence", "clock_start",
+                                 "reported_on"]}},
         "actions": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
             "owner": _STR, "action": {"type": "STRING"}, "due": _STR}, "required": ["action"]}},
         "summary": {"type": "STRING"},
@@ -155,7 +159,7 @@ ANSWER_3 = {
 for _answer in (ANSWER_1, ANSWER_2, ANSWER_3):
     for _f in _answer["findings"]:
         for _k, _v in (("repeat", False), ("subjects_affected", None), ("site_wide", False),
-                       ("escalation_evidence", "")):
+                       ("escalation_evidence", ""), ("clock_start", None), ("reported_on", None)):
             _f.setdefault(_k, _v)
 
 
@@ -192,6 +196,7 @@ Rules:
   affected yet (product quarantined, training planned before duties, an assessment rescheduled), use the lower
   severity, unless the rubric lists that situation as major or critical.
 - An open action item on its own is not a finding. Report a finding only when the note describes a problem.
+- If a study rule says a situation is not a problem (for example "not an SAE"), give that finding status "no_issue".
 - When the study rules give a definition or a deadline (for example what counts as an SAE, or "within 2 business
   days"), judge the note by the study rules, not general practice. Work out elapsed time from the dates in the note;
   business days are Monday to Friday. If the note lacks the dates needed, say so in the explanation.
@@ -215,7 +220,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "7.3"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "7.4"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -398,7 +403,7 @@ class LLMParser:
                 problems.append(f"'{_short(v.get(key))}' ({key.replace('_', ' ')}) is not in the note")
 
         # findings: verify the quoted evidence
-        findings = []
+        findings, checks = [], []
         topics = _profile.topic_map(self.profile)
         esc_n = self.profile["escalation"]["subjects_threshold"]
         for f in data.get("findings") or []:
@@ -415,6 +420,7 @@ class LLMParser:
                 f["subjects_affected"] = int(f.get("subjects_affected")) if f.get("subjects_affected") else None
             except (TypeError, ValueError):
                 f["subjects_affected"] = None
+            self._check_deadline(f, text, v, problems, checks)
             claims = bool(f.get("repeat") or f.get("site_wide") or (f["subjects_affected"] or 0) >= esc_n)
             esc = str(f.get("escalation_evidence") or "")
             # escalation only counts when the note really says it (in the escalation quote or the evidence itself)
@@ -464,11 +470,42 @@ class LLMParser:
             "action_items": action_items, "actions": [{k: a[k] for k in ("action", "owner", "due")}
                                                       for a in action_items],
             "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
+            "checks": checks,
             "backend": self.name,
             "model": self.client.model, "provider": getattr(self.client, "provider", ""),
             "llm_output": raw_answer, "profile": _profile.label(self.profile),
             "topic_names": {c: (t["display"], t["group"]) for c, t in _profile.topic_map(self.profile).items()},
         }
+
+    def _check_deadline(self, f: dict, text: str, visit: dict, problems: list[str], checks: list[str]) -> None:
+        """Reporting deadlines are counted by SCOPE from the dates in the note, not by the AI model."""
+        dl = _profile.deadline_map(self.profile).get(f["issue"])
+        if not dl or f["status"] == "resolved_on_site" or not f.get("verified"):
+            return
+        start_txt, rep_txt = f.get("clock_start"), f.get("reported_on")
+        if not (start_txt and rep_txt and _find(text, start_txt) and _find(text, rep_txt)):
+            return
+        visit_date = DL.parse_date(visit.get("visit_date"))
+        year = visit_date.year if visit_date else None
+        start, reported = DL.parse_date(start_txt, year), DL.parse_date(rep_txt, year)
+        if not (start and reported):
+            return
+        result = DL.check(start, reported, dl["amount"], dl["unit"])
+        f["deadline_check"] = {**result, "start": start.isoformat(), "reported": reported.isoformat(),
+                               "source": dl.get("source", "")}
+        said = "late" if f["status"] == "active" else "on time"
+        message = DL.describe(result, f["display"])
+        if result["verdict"] == "on time":
+            f["status"] = "no_issue"
+        elif result["verdict"] == "late":
+            f["status"], f["severity"] = "active", dl["severity"]
+        else:
+            problems.append(message)
+            return
+        if result["verdict"] != said:
+            message += f" The AI model said {said}; SCOPE's count is used."
+        f["explanation"] = message
+        checks.append(message)
 
     def predict_batch(self, texts: list[str]) -> list[dict]:
         out = []

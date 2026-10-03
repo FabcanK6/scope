@@ -1,0 +1,23 @@
+[
+  {
+    "id": "zlv-301-1",
+    "title": "SAE timing under this protocol",
+    "expected_risk": "low",
+    "why": "The SAE was reported 2 business days after awareness (Thursday to Monday), which this protocol allows; the knee replacement was planned before consent, so it is not an SAE.",
+    "text": "IMV, Site 112 (study ZLV-301), 8 October 2026. Subject 112-004 was hospitalized for pneumonia; the site became aware on Thursday 1 October 2026 and reported the SAE to the sponsor on Monday 5 October 2026. Subject 112-009 was admitted on 28 September 2026 for a knee replacement that was scheduled before she signed the informed consent form; no SAE form was filed. Week 12 PASI assessments were completed for all subjects within the visit window. Drug storage logs stayed within 15-25 C."
+  },
+  {
+    "id": "zlv-301-2",
+    "title": "Quarantined kit dispensed",
+    "expected_risk": "high",
+    "why": "Drug from kits quarantined after an excursion was dispensed before the sponsor approved it: critical.",
+    "text": "ZLV-301 IMV - Site 118 - 14 Oct 2026 - monitor: L. Varga\n- Pharmacy fridge room hit 29 C on 22 Sep; kits 3301-3310 quarantined and excursion reported to sponsor 23 Sep.\n- Kit 3304 from the quarantined batch was dispensed to subject 118-015 on 30 Sep, before any sponsor decision.\n- Subject has taken 14 days of tablets, no AEs.\n- Pharmacist to retrieve remaining tablets and file a deviation by 16 Oct 2026."
+  },
+  {
+    "id": "zlv-301-3",
+    "title": "Late visit inside the window, uncounted returns",
+    "expected_risk": "medium",
+    "why": "A Week 16 visit 6 days late is inside this protocol's \u00b17-day window, so it is not a deviation; returned tablets were not counted at two dispensing visits (dosing compliance, major).",
+    "text": "Interim visit, Site 130, ZLV-301, 21 October 2026. Subject 130-002's Week 16 visit took place 6 days after the scheduled day because of travel. Returned tablets were not counted at the Week 8 and Week 12 dispensing visits for subjects 130-002 and 130-006; the coordinator says the bottles were discarded. Consents and PASI assessments were in order. Coordinator to count returns at every dispensing visit from now on."
+  }
+]

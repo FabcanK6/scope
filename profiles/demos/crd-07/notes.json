@@ -1,0 +1,23 @@
+[
+  {
+    "id": "crd-07-1",
+    "title": "SAE reported on day 3",
+    "expected_risk": "low",
+    "why": "Reported 3 calendar days after awareness, which this device protocol allows (the default 24-hour rule would call it late).",
+    "text": "CRD-07 IMV - Site 3 - 12 October 2026. Subject 03-017 had a pocket infection requiring hospitalization; the site became aware on 5 October 2026 and reported the SAE to the sponsor on 8 October 2026. Device accountability log complete with all serial numbers. 6-month follow-ups all within window."
+  },
+  {
+    "id": "crd-07-2",
+    "title": "Implant by an untrained physician",
+    "expected_risk": "high",
+    "why": "A device was implanted by a physician who had not completed implant training and was not on the log: critical.",
+    "text": "CRD-07, Site 9, 14 Oct 2026, monitoring visit. Subject 09-004's HeartLoop was implanted on 1 October by Dr. Okafor, a new cardiology fellow who has not completed the implant training and is not on the delegation log. The implant was uneventful. PI to report the deviation and schedule Dr. Okafor's training by 21 Oct 2026."
+  },
+  {
+    "id": "crd-07-3",
+    "title": "Serial number missing",
+    "expected_risk": "medium",
+    "why": "One implanted device's serial number is missing from the accountability log: major under this protocol.",
+    "text": "Remote review CRD-07, Site 12, 16 October 2026. The device accountability log has no serial number recorded for the device implanted in subject 12-008 on 18 September 2026; the implant report shows it. All follow-ups on time, no SAEs. Coordinator to update the log."
+  }
+]

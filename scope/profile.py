@@ -120,6 +120,8 @@ def default_profile() -> dict:
         "study_rules": [],
         "escalation": {"subjects_threshold": 3, "subjects_max": "major", "repeat": True},
         "thresholds": {"medium": 3, "high": 6},
+        "deadlines": [{"topic": "SAE_REPORTING", "amount": 24, "unit": "hours", "severity": "critical",
+                       "what": "SAEs reported to the sponsor", "source": "SCOPE standard"}],
         "corrections": [],
         "changes": [],
     }
@@ -172,6 +174,18 @@ def validate(profile: dict) -> dict:
     if not 0 < th["medium"] < th["high"]:
         raise ProfileError("Points for medium risk must be above 0 and below the points for high risk.")
     p["thresholds"] = th
+    deadlines = []
+    for d in p.get("deadlines") or []:
+        try:
+            amount = float(d["amount"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if d.get("unit") in ("hours", "calendar_days", "business_days") and amount > 0 and d.get("topic"):
+            amount = int(amount) if float(amount).is_integer() else amount
+            deadlines.append({"topic": str(d["topic"]), "amount": amount, "unit": d["unit"],
+                              "severity": d.get("severity") if d.get("severity") in SEVERITIES else "critical",
+                              "what": str(d.get("what") or ""), "source": str(d.get("source") or "")})
+    p["deadlines"] = deadlines
     p["corrections"] = [c for c in p.get("corrections") or [] if isinstance(c, dict) and c.get("quote")]
     p["changes"] = list(p.get("changes") or [])
     p["name"] = str(p.get("name") or "Untitled study profile").strip()
@@ -192,7 +206,7 @@ def dumps(profile: dict) -> str:
 
 def fingerprint(profile: dict) -> str:
     """Short hash of everything that affects scoring (not the change log)."""
-    keep = {k: profile[k] for k in ("topics", "study_rules", "escalation", "thresholds")}
+    keep = {k: profile[k] for k in ("topics", "study_rules", "escalation", "thresholds", "deadlines")}
     keep["corrections"] = [c for c in profile["corrections"] if c.get("approved")]
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()[:10]
 
@@ -203,6 +217,10 @@ def label(profile: dict) -> dict:
 
 def enabled_topics(profile: dict) -> list[dict]:
     return [t for t in profile["topics"] if t["enabled"]]
+
+
+def deadline_map(profile: dict) -> dict[str, dict]:
+    return {d["topic"]: d for d in profile.get("deadlines") or []}
 
 
 def topic_map(profile: dict) -> dict[str, dict]:
@@ -283,6 +301,15 @@ def rubric_text(profile: dict) -> str:
                  "subjects the note says the problem affects (null if not stated). \"site_wide\" = true when the note "
                  "describes it as site-wide or systemic. \"escalation_evidence\" = the words from the note that show "
                  "the repeat or the spread (\"\" if neither).")
+    if profile.get("deadlines"):
+        lines.append("Reporting deadlines in this study (SCOPE checks the timing itself from the dates you copy):")
+        for d in profile["deadlines"]:
+            unit = d["unit"].replace("_", " ")
+            what = d["what"] or "report"
+            lines.append(f"- {d['topic']}: {what} within {d['amount']:g} {unit}; late = {d['severity']}.")
+        lines.append('For findings on these topics, copy the date the clock starts (e.g. when the site became aware) '
+                     'into "clock_start" and the date of the report into "reported_on", word for word from the note '
+                     '(null if the note does not say).')
     if profile["study_rules"]:
         lines.append("Study-specific rules (these come from the protocol and override the rubric above):")
         lines += [f"- {r}" for r in profile["study_rules"]]

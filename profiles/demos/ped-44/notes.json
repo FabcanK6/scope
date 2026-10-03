@@ -1,0 +1,23 @@
+[
+  {
+    "id": "ped-44-1",
+    "title": "No assent from an 8-year-old",
+    "expected_risk": "high",
+    "why": "Screening procedures were done on an 8-year-old with parental consent but no written assent: critical.",
+    "text": "PED-44 visit, Site 5, 13 October 2026. Subject 05-011 (age 8) had screening bloods and an EEG on 2 October with the mother's signed consent, but no written assent from the child was obtained. Dosing has not started. Seizure diaries complete. Site to obtain assent and report the deviation by 15 October 2026."
+  },
+  {
+    "id": "ped-44-2",
+    "title": "Dose not adjusted for weight",
+    "expected_risk": "medium",
+    "why": "The dose stayed 14% below the weight-based dose for 4 weeks after weight gain: an important deviation (major).",
+    "text": "IMV PED-44, Site 8, 15 Oct 2026. Subject 08-006 gained 4 kg by Week 8 but the dose was not recalculated; for the following 4 weeks the dose was 14% below the weight-based dose. No seizure worsening reported. Consent and assent documents in order. Pharmacist to recalculate doses at every visit."
+  },
+  {
+    "id": "ped-44-3",
+    "title": "Status epilepticus at home",
+    "expected_risk": "high",
+    "why": "Status epilepticus is always an SAE under this protocol, even without hospitalization; it was not reported: critical.",
+    "text": "PED-44 IMV - Site 12 - 16 October 2026. Seizure diary for subject 12-003 shows an episode of status epilepticus on 3 October 2026, treated at home with rescue medication by the parents; the child was not hospitalized. The site did not report it as an SAE. Other subjects: diaries complete, doses correct."
+  }
+]

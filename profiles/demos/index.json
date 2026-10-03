@@ -1,0 +1,42 @@
+[
+  {
+    "id": "zlv-301",
+    "label": "Psoriasis \u00b7 ZLV-301 (Phase III)",
+    "summary": "Oral tablets, adults with psoriasis. SAEs within 2 business days; elective pre-planned hospitalizations are not SAEs; visit windows \u00b13 days to Week 12.",
+    "area": "Dermatology",
+    "notes": 3,
+    "rules": 10
+  },
+  {
+    "id": "onc-210",
+    "label": "Oncology \u00b7 ONC-210 (Phase II)",
+    "summary": "IV infusion, NSCLC. Progression is not an SAE; scans every 6 weeks \u00b17 days; dosing held if neutrophils < 1.0; SAEs within 24 hours.",
+    "area": "Oncology",
+    "notes": 3,
+    "rules": 9
+  },
+  {
+    "id": "vax-118",
+    "label": "Vaccine \u00b7 VAX-118 (Phase III)",
+    "summary": "Single injection, adults 60+. Strict cold chain 2-8 C; Day 29 blood sample is key; 7-day e-diary; SAEs within 24 hours.",
+    "area": "Vaccines",
+    "notes": 3,
+    "rules": 7
+  },
+  {
+    "id": "crd-07",
+    "label": "Medical device \u00b7 CRD-07 (pivotal)",
+    "summary": "Implanted device. SAEs and device deficiencies within 3 calendar days; only trained, listed implanters; serial numbers tracked.",
+    "area": "Cardiology",
+    "notes": 3,
+    "rules": 4
+  },
+  {
+    "id": "ped-44",
+    "label": "Pediatrics \u00b7 PED-44 (Phase II)",
+    "summary": "Children 4-17. Parent consent plus child assent from age 7; dose by weight each visit; status epilepticus is always an SAE.",
+    "area": "Pediatric neurology",
+    "notes": 3,
+    "rules": 5
+  }
+]
