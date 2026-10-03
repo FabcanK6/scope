@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 from scope import profile as P  # noqa: E402
 from scope import demos as DM  # noqa: E402
 from scope import learning as L  # noqa: E402
+from scope import ownmodel as OM  # noqa: E402
 from scope import protocol as PR  # noqa: E402
 from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
@@ -94,6 +95,24 @@ def library() -> dict | None:
         st.session_state["learning_error"] = lib["_error"]
         return None
     return lib
+
+
+@st.cache_resource(show_spinner=False, max_entries=2)
+def _own_model(digest: str, bar: float) -> OM.OwnModel:
+    return OM.train(library(), bar=bar)
+
+
+def own_model() -> OM.OwnModel | None:
+    """SCOPE's own model, retrained by itself whenever the approved cases change (a few seconds)."""
+    lib = library()
+    try:
+        bar = float(_setting("SCOPE_OWN_MODEL_BAR") or OM.ACTIVATION_BAR)
+    except ValueError:
+        bar = OM.ACTIVATION_BAR
+    try:
+        return _own_model(L.digest(lib) if lib else "-", bar)
+    except Exception:  # never let the side model stop a reading
+        return None
 
 
 def share_case(case: dict) -> bool:
@@ -443,6 +462,31 @@ def correction_form(note: str, rec: dict, store=None) -> None:
                 st.success(msg)
 
 
+def own_model_status() -> None:
+    st.subheader("SCOPE's own model")
+    om = own_model()
+    if om is None:
+        st.caption("SCOPE's own model could not be trained right now.")
+        return
+    r = om.report
+    if r["accuracy"] is None:
+        st.caption("Not enough expert-labelled notes yet to measure it.")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Agrees with experts", f"{r['accuracy']:.0%}", help="Risk level, on expert-labelled notes it was not "
+              "trained on (5-fold check, repeated 3 times).")
+    c2.metric("High-risk visits caught", f"{r['high_recall']:.0%}" if r["high_recall"] is not None else "-")
+    c3.metric("Trained on", f"{r['expert_notes'] + r['shared_cases']} notes",
+              help=f"{r['expert_notes']} expert-labelled notes and {r['shared_cases']} approved shared cases")
+    if om.active:
+        st.success("Switched on: it gives a second opinion on every visit's risk level, and a rough estimate when the "
+                   "AI model is unavailable.")
+    else:
+        st.info(f"Not switched on yet: it switches itself on at {r['bar']:.0%} agreement (and "
+                f"{r['high_recall_bar']:.0%} of high-risk visits caught). It retrains by itself every time a shared "
+                "case is approved, so each confirmed or corrected reading moves it closer.")
+
+
 def learned_tab() -> None:
     """What SCOPE has learned from its users, and the review queue for curators."""
     st.markdown("**SCOPE learns from the people who use it.** When someone corrects a reading, or confirms it was "
@@ -473,8 +517,7 @@ def learned_tab() -> None:
             for c in reversed(rulings_)]), hide_index=True, width="stretch")
     else:
         st.caption("No rulings yet. Correct a reading and tick **Share it** to teach SCOPE the first one.")
-    st.caption("Confirmed readings and corrections are also the training data for SCOPE's own model, the next step "
-               "in how it learns.")
+    own_model_status()
 
     with st.expander("Review shared cases (curators)"):
         expected = _setting("SCOPE_CURATOR_KEY")
@@ -921,6 +964,13 @@ with tab_one:
                 rec = cached_llm("record", note, lambda: parser.analyze(note))
         except LLMError as e:
             show_llm_error(e)
+            om = own_model()
+            if om is not None and om.active:
+                guess = om.predict(note)
+                st.info("While the AI reading is unavailable, **SCOPE's own model** estimates "
+                        f"**{guess['risk'].upper()}** risk for this visit. It is a rough estimate of the risk level "
+                        f"only (it agrees with experts on {om.report['accuracy']:.0%} of notes), with no findings or "
+                        "evidence. Try the full reading again later.")
     if rec:
         v = rec["visit"]
         c1, c2, c3, c4 = st.columns([1.6, 1, 1, 1])
@@ -974,6 +1024,12 @@ with tab_one:
                        "from the verified active findings "
                        f"with the study profile {prof_used.get('name', 'SCOPE standard')} "
                        f"(v{prof_used.get('version', '3.1')}).")
+            second = OM.second_opinion(own_model(), note, rec["risk"]["level"])
+            if second and second["second_look"]:
+                st.warning("**Second look:** SCOPE's own model, trained on notes experts labelled, reads this visit as "
+                           "**HIGH** risk; the AI reading says LOW. Check the note for a problem the reading missed.")
+            elif second:
+                st.caption(f"SCOPE's own model reads this visit as {second['risk'].upper()} risk.")
             learned = rec.get("learned_from") or []
             if learned:
                 st.caption(f"SCOPE used {len(learned)} ruling{'s' if len(learned) > 1 else ''} it learned from "

@@ -84,7 +84,7 @@ SCOPE does not wait for a new release to get better. Under every result there ar
 
 Shared cases wait for review. A curator approves or rejects each one (and decides whether a ruling applies to all studies or only to its own study). From the moment a correction is approved, SCOPE shows it to the AI model as a ruling whenever it reads a similar note, for every user. The **What SCOPE learned** tab lists every ruling in use, with when it was approved. Nothing changes SCOPE's judgement without a person approving it, and every case keeps who, when and why, the audit trail a sponsor would ask for. In the Accuracy check a note never sees a ruling made on that same note, so the score stays honest.
 
-Approved confirmations and corrections are also the labelled data for the next step: SCOPE's own model, retrained on them on a schedule and promoted only when it beats the current one on the expert-labelled notes. The curator view exports them (`scope_training.jsonl`).
+Approved confirmations and corrections also train **SCOPE's own model**: a small text model (TF-IDF and logistic regression) trained on the expert-labelled notes plus every approved case. It retrains by itself in a few seconds whenever an approved case is added or retired, then measures itself on expert notes it was not trained on (5-fold, repeated 3 times; shared copies of a test note are kept out). It **switches itself on only when it clears a bar**: 80% agreement with the experts' risk levels and 80% of high-risk visits caught (`SCOPE_OWN_MODEL_BAR` changes the first). Once on, it gives a second opinion on every visit, raising a **Second look** warning when it reads a visit as high risk and the AI reading says low, and it gives a rough risk estimate when the AI model is unavailable (for example when the free quota runs out). Today, with 56 expert notes, it agrees about 64% of the time and catches about 82% of high-risk visits, so it stays in the background; the **What SCOPE learned** tab shows its current score, so its progress is visible. The curator view exports the approved cases (`scope_training.jsonl`).
 
 Only fictional or de-identified notes may be shared. The shared library is a private Hugging Face dataset; set it up in the app's secrets:
 
@@ -244,6 +244,7 @@ scope/
   protocol.py          protocol intake: read a protocol, draft cited study rules, build a profile
   deadlines.py         reporting deadlines counted from the note's dates (calendar, business days, hours)
   learning.py          shared learning: shared cases, curator review, rulings used on similar notes
+  ownmodel.py          SCOPE's own model: retrains on approved cases, switches itself on at a measured bar
   demos.py             the five fictional demo studies (profiles/demos/)
   providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds
