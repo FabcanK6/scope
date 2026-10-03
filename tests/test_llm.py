@@ -240,6 +240,25 @@ class TestLLM(unittest.TestCase):
             first = " ".join(r["text"].split())[:80]
             self.assertNotIn(first, " ".join(SYSTEM.split()), r["id"])
 
+    def test_looping_visit_detail_does_not_sink_good_findings(self):
+        from scope.engine import LLMParser
+
+        note = ("IMV, Site 44, 12 October 2026. The pharmacy fridge temperature log is blank for Saturday and Sunday "
+                "on the last two weekends; staff said no one checks the log at weekends. Drug accountability "
+                "reconciled for all kits.")
+        # live (gemini-3.5-flash): correct findings, then visit_type looped into thousands of digits
+        answer = {"findings": [{"issue": "TEMP_EXCURSION", "status": "active", "severity": "major",
+                                "evidence": "The pharmacy fridge temperature log is blank for Saturday and Sunday on "
+                                            "the last two weekends", "explanation": "logs not kept"}],
+                  "actions": [], "summary": "Weekend log gaps.",
+                  "visit": {"visit_type": "IMV" + "2689357293572935" * 200, "visit_date": "12 October 2026",
+                            "site": "Site 44"}}
+        client = FakeClient([fake_response(answer)])
+        rec = LLMParser(client).analyze(note)
+        self.assertEqual(len([c for c in client.calls if c[0] == "POST"]), 1)  # accepted first time
+        self.assertEqual(rec["risk"]["level"], "medium")
+        self.assertEqual(rec["visit"]["visit_type"]["code"], "IMV")  # the looping tail is not kept
+
     def test_garbled_answer_is_retried_never_scored(self):
         from scope.data.handwritten import load_handwritten
         from scope.engine import UNREADABLE, LLMParser

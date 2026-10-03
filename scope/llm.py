@@ -31,6 +31,8 @@ DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "")
 # note is careful extraction, not puzzle solving, and SCOPE's code does the scoring and date counting, so "low" keeps
 # answers fast. Override with GEMINI_THINKING (low / medium / high).
 THINKING_LEVEL = os.environ.get("GEMINI_THINKING", "low")
+# a full reading is 1-3 thousand tokens; a model stuck in a loop stops here instead of running for half a minute
+MAX_OUTPUT_TOKENS = 8192
 STATUSES = ["active", "resolved_on_site", "no_issue"]
 SEVERITIES = ["minor", "major", "critical"]
 
@@ -219,7 +221,7 @@ class GeminiClient(LLMClient):
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {},
+            "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS},
         }
         if schema is not None:
             body["generationConfig"].update(responseMimeType="application/json", responseSchema=schema)

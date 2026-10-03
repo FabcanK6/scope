@@ -312,19 +312,27 @@ class Unreadable(LLMError):
 
 
 def output_problem(data, text: str) -> str | None:
-    """Why an LLM answer can't be trusted as a whole (None when it looks sound)."""
+    """Why an LLM answer can't be trusted as a whole (None when it looks sound).
+
+    A garbled or rambling *visit detail* (live: a visit_type that looped into thousands of digits after a correct
+    set of findings) does not sink the reading: visit details are checked against the note later and a bad one is
+    simply dropped. It only counts when the answer has no findings at all, because then nothing else was read."""
     if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
         return "no findings list"
     if not data["findings"] and not str(data.get("summary") or "").strip():
         return "empty answer"
-    values = [v for v in (data.get("visit") or {}).values() if isinstance(v, str)]
-    values += [str(f.get("evidence", "")) for f in data["findings"] if isinstance(f, dict)]
-    for v in values:
+    for f in data["findings"]:
+        v = str(f.get("evidence", "")) if isinstance(f, dict) else ""
         if len(v) > 600 or (_FOREIGN.search(v) and not _FOREIGN.search(text)):
-            return "garbled value"
-    for k, v in (data.get("visit") or {}).items():
-        if isinstance(v, str) and (len(v) > 120 or (_RAMBLE.search(v) and _norm(v) not in _norm(text))):
-            return f"reasoning inside a value: {k} = \"{v[:60]}\""
+            return f"garbled value: evidence = \"{_short(v)}\""
+    if not data["findings"]:
+        for k, v in (data.get("visit") or {}).items():
+            if not isinstance(v, str):
+                continue
+            if len(v) > 600 or (_FOREIGN.search(v) and not _FOREIGN.search(text)):
+                return f"garbled value: {k} = \"{_short(v)}\""
+            if len(v) > 120 or (_RAMBLE.search(v) and _norm(v) not in _norm(text)):
+                return f"reasoning inside a value: {k} = \"{_short(v)}\""
     return None
 
 
