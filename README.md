@@ -2,18 +2,19 @@
 
 [![tests](https://github.com/FabcanK6/scope/actions/workflows/tests.yml/badge.svg)](https://github.com/FabcanK6/scope/actions/workflows/tests.yml)
 
-SCOPE reads free-text clinical trial monitoring visit notes (formal visit reports, quick field notes, visit e-mails) and turns each one into a record anyone working on the study (monitor, coordinator, study manager) can act on:
+SCOPE reads free-text clinical trial monitoring visit notes (formal visit reports, quick field notes, visit e-mails) and turns each one into a record anyone working on the study can act on:
 
-- **Risk level** (high / medium / low) computed by a severity rubric reviewed by an experienced clinical research professional, with the reason ("1 critical finding")
+- **Risk level** (high / medium / low) computed in code by a severity rubric, with the reason ("1 critical finding")
 - **Every finding with its evidence**: what is an active problem, what was fixed during the visit, and what was checked and fine, each with the sentence from the note that shows it
-- **Visit details**: visit type, date, site, monitor, PI, screened and enrolled counts
-- **Open action items** with owner and due date
-- **A draft follow-up letter** to the investigator, ready to edit
+- **Judged by the study's own protocol**: upload a protocol once and SCOPE drafts the study's rules (SAE definitions, reporting deadlines, visit windows, important deviations), each quoted with its page; deadlines are counted by code, not guessed
+- **Visit details, open action items** with owner and due date, and **a draft follow-up letter** to the investigator
+- **Learns from the people who use it**: corrections and ratings that three users agree on change how SCOPE reads similar notes, for everyone, without a new release
+- **Any AI model**: the free shared Gemini engine, or your own key for Gemini, OpenAI, Anthropic Claude or any OpenAI-compatible service
 - **Portfolio view** across many visits, and similar past visits
 
-**Live app:** [scope-fabcank6.streamlit.app](https://scope-fabcank6.streamlit.app)
+**Live app:** [scope-fabcank6.streamlit.app](https://scope-fabcank6.streamlit.app) · try a demo study in two clicks, or rate a practice visit in **Help SCOPE learn**.
 
-All notes, sites and people in this repository are fictional.
+All notes, sites, studies and people in this repository and the app are fictional. Only use fictional or de-identified notes.
 
 ---
 
@@ -26,18 +27,22 @@ SCOPE does the first read. It is built to earn its users' trust rather than to i
 ## How it works
 
 ```text
-note ─► LLM (Google Gemini): instructions + severity rubric + three worked examples
-          returns JSON: visit details, every finding (topic, status, severity, quoted evidence), action items
+protocol ─► study profile: rubric + the study's rules (each quoted with its page) + reporting deadlines
+note ─► AI model (Gemini, or your own provider): instructions + the study profile + worked examples
+          + rulings the community agreed on for similar notes
+          returns JSON: visit details, every finding (topic, status, rule, severity, quoted evidence), action items
      ─► verification (plain code): every quote, name, date and action must appear in the note, or it is dropped
-     ─► rubric (plain code): risk = high / medium / low from the verified active findings
+     ─► deadlines (plain code): elapsed calendar days, business days or hours, from the note's dates
+     ─► rubric (plain code): protocol-rule severities, escalation, risk = high / medium / low
+     ─► safety net (plain code): alerts when the note signals an SAE, consent, dosing or IRB problem the reading missed
      ─► visit record · highlighted note · audit summary · follow-up letter · portfolio table
 ```
 
-- **The LLM reads; code decides.** The model's job is reading comprehension: is this sentence a problem, something fixed on site, or a confirmation that all is well? The risk level is never the model's opinion. It is computed from the verified findings with a fixed rubric, so the same findings always give the same answer and the rubric can be changed in one place (`scope/llm.py`).
+- **The LLM reads; code decides.** The model's job is reading comprehension: is this sentence a problem, something fixed on site, or a confirmation that all is well? The risk level is never the model's opinion. It is computed from the verified findings with a fixed rubric, so the same findings always give the same answer and the rubric lives in an editable study profile (`scope/profile.py`).
 - **Nothing without evidence.** Every finding must quote the note. SCOPE checks each quote (ignoring case and spacing) and drops findings whose quote is not there, as well as names, dates and action items that do not appear in the note. Anything dropped is listed so the reviewer can see it.
 - **Fails loudly, not quietly.** An empty or garbled LLM answer is retried and never scored (an empty answer would otherwise look like a clean, low-risk visit). A plain-code safety net also scans the note for words that signal a possible SAE, consent problem, dosing error or IRB lapse; if the LLM reported nothing on that topic, SCOPE shows a red safety alert. The LLM is called with Gemini's default temperature, as Google recommends for Gemini 3 models (a low temperature can cause looping and degraded answers).
-- **Few-shot, not fine-tuned.** The prompt contains the rubric and three worked examples in three note styles (a formal report with problems fixed on site and one open major issue, bullet notes with a critical finding, and a short e-mail with only a minor issue). The examples were written for the prompt and are not in any test set or in the app's example notes, so the demo and the evaluation are not answered in advance (a unit test checks this). Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model. The app's **Accuracy check** tab runs SCOPE on these labelled notes and shows where it agrees and disagrees with the expert labels.
-- **Free and light.** It runs on the free tier of the Gemini API through Python's standard library; the app has no ML framework to install. Answers are cached for 24 hours so repeated notes cost nothing, and each visitor is capped at 25 new requests.
+- **Few-shot, not fine-tuned.** The prompt contains the rubric and three worked examples in three note styles (a formal report with problems fixed on site and one open major issue, bullet notes with a critical finding, and a short e-mail with only a minor issue). The examples were written for the prompt and are not in any test set or in the app's example notes, so the demo and the evaluation are not answered in advance (a unit test checks this). SCOPE improves through its study profiles and the rulings its users agree on (below), not by retraining the AI model. The app's **Accuracy check** tab runs SCOPE on labelled notes and shows where it agrees and disagrees with the labels.
+- **Free and light.** It runs on the free tier of the Gemini API through Python's standard library; the app has no deep-learning framework to install. Answers are cached for 24 hours so repeated notes cost nothing, each visitor is capped at 25 new requests on the shared engine, and models whose free daily quota is used up are skipped until it resets.
 
 ### Why an LLM and not the fine-tuned model
 
@@ -111,7 +116,7 @@ Two escalation rules weigh a problem the way an experienced reviewer does. A **r
 | Data quality | data entry backlog, open or aging queries, SDV and source access, source documentation |
 | Site operations | staff, training and delegation, PI oversight, enrollment, regulatory and essential documents, facility and equipment, follow-up of prior findings, site engagement |
 
-Each issue type has minor, major and critical examples in `scope/llm.py` (`RUBRIC_TEXT`). The v1 baseline model keeps its original 12 issue types.
+Each issue type has minor, major and critical examples in the default study profile (`scope/profile.py`), editable per study in the app. The v1 baseline model keeps its original 12 issue types.
 
 
 ### Study profiles: the rubric is a feature, not code
@@ -139,7 +144,17 @@ Every change is versioned and logged, and every result records the profile name,
 GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
 ```
 
-**Stress test** (25 notes so far, growing to about 150): written to cover many writing styles, every visit type, all 22 issue types, both escalation rules and common traps (problems fixed on site, "no SAEs" negations, resolved past items, dates near the visit date). Labels were reviewed and approved by an experienced clinical research professional, and none of these notes are in SCOPE's instructions, so this is the honest measure.
+**Stress test** (25 notes): written to cover many writing styles, every visit type, all 22 issue types, both escalation rules and common traps (problems fixed on site, "no SAEs" negations, resolved past items, dates near the visit date). Labels were reviewed by an experienced clinical research professional, and none of these notes are in SCOPE's instructions, so this is the honest measure. **Practice notes** (25 more, `scope/data/practice.txt`) are labelled by the community in the app; each one joins the Accuracy check once three people agree on it.
+
+### Results so far (LLM engine)
+
+| Test set | Notes | Risk level agrees | High-risk visits caught | When |
+|---|---|---|---|---|
+| Stress test | 25 | 23 (92%) | 9 of 10 | Oct 2026, Gemini Flash |
+| Formal visit reports | 7 | 7 | all | Oct 2026, after rubric rulings |
+| Demo studies (each under its own protocol) | 15 | 12 (80%) | 5 of 6 | Oct 2026, mostly the smallest Gemini model (free quota spent); the three misses led to fixes: quotes joined with "...", protocol rules setting severity, and one relabel |
+
+Results vary with the model that answered: the free tier falls back to smaller models when the larger ones' daily quota is used up. Every result in the app says which model read it, and the Accuracy check can be re-run at any time.
 
 Test sets: **realistic** (7 long, formal notes in the style of real monitoring reports, provided by an experienced clinical research professional) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the rubric, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
 
@@ -252,11 +267,14 @@ scope/
   metrics.py           risk, issue, span, action-item and calibration metrics
   evaluate.py          evaluation CLI for every engine
   data/realistic.txt   7 realistic notes (development set)
+  data/stress.txt      25 stress-test notes with reviewed labels
+  data/practice.txt    25 practice notes the community labels in the app
   data/handwritten.*   24 hand-written evaluation notes and their loader
   data/generate.py     synthetic note generator (v1 training data)
   model.py, train.py   v1 fine-tuned BERT (baseline)
   rules.py             regex + keyword baseline
   predict.py           v1 parsers (BERT, rules, hybrid)
+profiles/demos/        five fictional demo studies: protocol PDF, study profile, example notes
 app/streamlit_app.py   web app
 notebooks/             Colab notebook for the v1 baseline
 scripts/               teacher-note generation with an LLM; Amazon Comprehend Medical comparison
@@ -268,7 +286,8 @@ tests/                 unit tests (the LLM is replaced by a fake, so tests need 
 - Needs an internet connection and API quota. When the free quota runs out, the app says so; visitors can use their own free key.
 - LLM output can vary between runs and between model versions. Verification and the fixed rubric limit the impact, and `GEMINI_MODEL` pins a version; re-run the evaluation whenever the model changes.
 - The realistic test notes are few and shaped the prompt. Real use needs a larger, independent set of de-identified notes reviewed by experienced clinical research professionals.
-- The rubric reflects one experienced reviewer; organizations weight findings differently and should adapt it.
+- The default rubric started from one experienced reviewer; it changes as the community agrees on rulings, and each organization can adapt it in a study profile.
+- Community learning needs people: rulings and practice labels count only once three people agree, and anonymous browser ids can be reset, so a curator can retire anything that should not stand.
 - SCOPE supports human review; it does not replace it.
 
 ## License
