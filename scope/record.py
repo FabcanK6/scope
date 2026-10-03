@@ -170,6 +170,7 @@ def build_record(text: str, pred: dict) -> dict:
         "model": pred.get("model"),
         "provider": pred.get("provider"),
         "seconds": pred.get("seconds"),
+        "engine_log": pred.get("engine_log", []),
         "llm_output": pred.get("llm_output"),
         "alerts": pred.get("alerts", []),
         "checks": pred.get("checks", []),

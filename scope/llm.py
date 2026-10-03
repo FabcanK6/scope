@@ -92,6 +92,7 @@ class LLMClient:
 
     def __init__(self) -> None:
         self.avoid: set[str] = set()  # models that just gave a bad answer (used by providers with several models)
+        self.trail: list[str] = []  # what happened on each try, e.g. "gemini-3.8-flash: timed out after 60 s"
 
     @property
     def label(self) -> str:
@@ -219,6 +220,7 @@ class GeminiClient(LLMClient):
         for model in self.candidates():
             if last is not None and self._clock() - started > self.time_budget:
                 break  # tried long enough: say so instead of keeping the user waiting
+            t0 = self._clock()
             try:
                 try:
                     data = self._call_with_retry(f"models/{model}:generateContent", self._body_for(model, body))
@@ -228,11 +230,16 @@ class GeminiClient(LLMClient):
                     self._no_thinking.add(model)  # this model does not take a thinking level: ask without it
                     data = self._call_with_retry(f"models/{model}:generateContent", body)
             except (ModelNotFound, ModelBusy, QuotaExceeded) as e:
+                self.trail.append(f"{model}: {_outcome(e)} after {self._clock() - t0:.0f} s")
                 if isinstance(e, ModelSlow):
                     self._slow[model] = self._clock()
                 if not isinstance(last, QuotaExceeded):  # report the quota problem if any model hit it
                     last = e
                 continue
+            except LLMError as e:
+                self.trail.append(f"{model}: error after {self._clock() - t0:.0f} s ({str(e)[:120]})")
+                raise
+            self.trail.append(f"{model}: answered in {self._clock() - t0:.0f} s")
             self.model = model  # remember the model that worked
             try:
                 return "".join(p.get("text", "") for p in data["candidates"][0]["content"]["parts"])
@@ -246,6 +253,7 @@ class GeminiClient(LLMClient):
         raise LLMError(f"No usable Gemini model found ({last}).")
 
     def _call_with_retry(self, path: str, body: dict) -> dict:
+        """Busy models get two more tries after a short wait; a timeout moves on at once."""
         for delay in (*self.retry_delays, None):
             try:
                 return self._request("POST", path, body)
@@ -268,6 +276,16 @@ ESCALATION_SUBJECTS = 3  # default profile: a problem affecting this many subjec
 def final_severity(f: dict, profile: dict | None = None) -> tuple[str, list[str]]:
     """Escalation for one finding under a profile (default: rubric v3.2). See ``scope.profile.final_severity``."""
     return _profile.final_severity(f, profile or _profile.default_profile())
+
+
+def _outcome(e: Exception) -> str:
+    if isinstance(e, ModelSlow):
+        return "timed out"
+    if isinstance(e, QuotaExceeded):
+        return "daily free quota used up" if e.per_day else "per-minute limit reached"
+    if isinstance(e, ModelNotFound):
+        return "not available with this key"
+    return f"busy ({e})"
 
 
 def _message(detail: str) -> str:

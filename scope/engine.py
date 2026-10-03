@@ -365,6 +365,7 @@ class LLMParser:
     def read(self, text: str) -> dict:
         """Ask for a reading; a bad answer is asked again, preferring a different model each time."""
         reason, raw = "", ""
+        self.client.trail = []
         try:
             for _ in range(self.attempts):
                 try:
@@ -374,11 +375,17 @@ class LLMParser:
                     reason, raw = "not valid JSON", e.raw
                 if not reason:
                     return data
+                self.client.trail.append(f"{self.client.model}: answer rejected ({reason}), asking again")
                 if self.client.model:
                     self.client.avoid.add(self.client.model)
+        except LLMError as e:
+            e.engine_log = list(self.client.trail)  # what was tried, shown with the error
+            raise
         finally:
             self.client.avoid.clear()
-        raise Unreadable(reason, raw, self.client.model)
+        err = Unreadable(reason, raw, self.client.model)
+        err.engine_log = list(self.client.trail)
+        raise err
 
     def predict(self, text: str) -> dict:
         started = time.monotonic()
@@ -475,6 +482,7 @@ class LLMParser:
             "checks": checks,
             "backend": self.name,
             "model": self.client.model, "provider": getattr(self.client, "provider", ""), "seconds": seconds,
+            "engine_log": list(getattr(self.client, "trail", [])),
             "llm_output": raw_answer, "profile": _profile.label(self.profile),
             "topic_names": {c: (t["display"], t["group"]) for c, t in _profile.topic_map(self.profile).items()},
         }

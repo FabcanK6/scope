@@ -75,6 +75,22 @@ class TestSpeed(unittest.TestCase):
         client.generate("s", "p")
         self.assertEqual(client.calls[-1], ("POST", "models/gemini-8-flash:generateContent"))
 
+    def test_engine_log_says_what_was_tried(self):
+        from scope.engine import LLMParser
+
+        empty = {"visit": {}, "findings": [], "actions": [], "summary": "Nothing to report."}
+        client = FakeClient([ModelSlow("timeout"), QuotaExceeded('"PerDay"'), fake_response(empty)],
+                            models=("gemini-9-flash", "gemini-8-flash", "gemini-7-flash"))
+        rec = LLMParser(client).analyze(NOTE)
+        log = rec["engine_log"]
+        self.assertTrue(log[0].startswith("gemini-9-flash: timed out"), log)
+        self.assertTrue(log[1].startswith("gemini-8-flash: daily free quota used up"), log)
+        self.assertTrue(log[2].startswith("gemini-7-flash: answered"), log)
+        client = FakeClient([ModelBusy("HTTP 503")] * 20, models=("gemini-9-flash",))
+        with self.assertRaises(LLMError) as ctx:
+            LLMParser(client).analyze(NOTE)
+        self.assertIn("busy", ctx.exception.engine_log[-1])
+
     def test_time_budget(self):
         client = FakeClient([ModelSlow("timeout")] * 6, models=("gemini-9-flash", "gemini-8-flash", "gemini-7-flash"))
         t = iter([0, 0, 0, 70, 70, 140, 140, 220, 220, 300, 300])

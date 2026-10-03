@@ -252,8 +252,11 @@ def examples() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 def show_llm_error(e: LLMError) -> None:
     st.error(str(e))
+    if getattr(e, "engine_log", None):
+        with st.expander("What SCOPE tried"):
+            st.markdown("\n".join(f"- {line}" for line in e.engine_log))
     if isinstance(e, Unreadable) and e.raw:
-        with st.expander("What Gemini returned (not used)"):
+        with st.expander("What the AI model returned (not used)"):
             st.code(e.raw[:6000])
 
 
@@ -785,6 +788,9 @@ with tab_one:
                        "from the verified active findings "
                        f"with the study profile {prof_used.get('name', 'SCOPE standard')} "
                        f"(v{prof_used.get('version', '3.1')}).")
+            if rec.get("engine_log"):
+                with st.expander("How this was read"):
+                    st.markdown("\n".join(f"- {line}" for line in rec["engine_log"]))
             correction_form(note, rec)
         with t_note:
             st.markdown(highlight(note, rec), unsafe_allow_html=True)
