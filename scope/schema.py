@@ -3,7 +3,7 @@
 SCOPE reads one site-visit note and predicts three things at once:
 
 * ``risk``    - one overall site-risk level for the visit (low / medium / high)
-* ``issues``  - which of 12 issue types are *active* in the note (multi-label)
+* ``issues``  - which issue types are *active* in the note (22 in rubric v3; 12 in the v1 baseline)
 * ``spans``   - word-level BIO tags for visit metadata and follow-up action items
 """
 
@@ -23,24 +23,41 @@ class Issue:
     display: str
 
 
+# Rubric v3 (approved by the CRA, 2026-10-03): 22 issue types. The LLM engine uses all of them.
 ISSUES: list[Issue] = [
-    Issue("DATA_ENTRY_BACKLOG", "Data & queries", "Data entry backlog / missing pages"),
-    Issue("QUERY_AGING", "Data & queries", "Open or aging queries"),
-    Issue("SDV_BACKLOG", "Data & queries", "Source data verification behind"),
     Issue("SAE_REPORTING", "Patient safety & consent", "Late or missing SAE reporting"),
-    Issue("CONSENT", "Patient safety & consent", "Informed consent issue"),
+    Issue("AE_REPORTING", "Patient safety & consent", "Adverse event recording"),
+    Issue("CONSENT", "Patient safety & consent", "Informed consent"),
+    Issue("ELIGIBILITY", "Patient safety & consent", "Eligibility"),
+    Issue("SAFETY_REPORTS", "Patient safety & consent", "Safety reports to IRB and PI"),
+    Issue("UNBLINDING", "Patient safety & consent", "Blinding"),
     Issue("PROTOCOL_DEVIATION", "Protocol & drug", "Protocol deviation"),
-    Issue("IP_ACCOUNTABILITY", "Protocol & drug", "Investigational product accountability"),
-    Issue("TEMP_EXCURSION", "Protocol & drug", "IP temperature excursion"),
-    Issue("STAFF_TURNOVER", "Site operations", "Staff turnover / training gap"),
-    Issue("PI_OVERSIGHT", "Site operations", "PI oversight gap"),
-    Issue("ENROLLMENT_LAG", "Site operations", "Enrollment behind target"),
-    Issue("REG_DOCS", "Site operations", "Regulatory binder / essential documents"),
+    Issue("DOSING_ERROR", "Protocol & drug", "Dosing error"),
+    Issue("IP_ACCOUNTABILITY", "Protocol & drug", "IP accountability"),
+    Issue("TEMP_EXCURSION", "Protocol & drug", "IP storage and temperature"),
+    Issue("LAB_SAMPLES", "Protocol & drug", "Lab samples and kits"),
+    Issue("DATA_ENTRY_BACKLOG", "Data quality", "Data entry backlog"),
+    Issue("QUERY_AGING", "Data quality", "Open or aging queries"),
+    Issue("SDV_BACKLOG", "Data quality", "SDV and source access"),
+    Issue("SOURCE_DOCS", "Data quality", "Source documentation"),
+    Issue("STAFF_TURNOVER", "Site operations", "Staff, training and delegation"),
+    Issue("PI_OVERSIGHT", "Site operations", "PI oversight"),
+    Issue("ENROLLMENT_LAG", "Site operations", "Enrollment"),
+    Issue("REG_DOCS", "Site operations", "Regulatory and essential documents"),
+    Issue("FACILITY_EQUIPMENT", "Site operations", "Facility and equipment"),
+    Issue("PRIOR_ACTIONS", "Site operations", "Follow-up of prior findings"),
+    Issue("SITE_ENGAGEMENT", "Site operations", "Site engagement"),
 ]
 ISSUE_CODES = [i.code for i in ISSUES]
-ISSUE2ID = {c: i for i, c in enumerate(ISSUE_CODES)}
 ISSUE_BY_CODE = {i.code: i for i in ISSUES}
 ISSUE_GROUPS = list(dict.fromkeys(i.group for i in ISSUES))
+
+# The 12 issue types of the v1 baseline (fine-tuned BERT, rules, synthetic generator). Frozen: the published
+# v1 model's issue head has exactly these outputs, in this order.
+V1_ISSUE_CODES = ["DATA_ENTRY_BACKLOG", "QUERY_AGING", "SDV_BACKLOG", "SAE_REPORTING", "CONSENT",
+                  "PROTOCOL_DEVIATION", "IP_ACCOUNTABILITY", "TEMP_EXCURSION", "STAFF_TURNOVER", "PI_OVERSIGHT",
+                  "ENROLLMENT_LAG", "REG_DOCS"]
+ISSUE2ID = {c: i for i, c in enumerate(V1_ISSUE_CODES)}
 
 # Span types tagged at word level.
 METADATA_TYPES = ["VISIT_TYPE", "VISIT_DATE", "SITE", "MONITOR", "PI", "SCREENED", "ENROLLED"]
@@ -60,7 +77,8 @@ VISIT_TYPES = {
     "FOR_CAUSE": "For-cause visit",
 }
 
-# Severity rubric (v2): each active finding scores minor = 1, major = 3, critical = 6.
+# Severity rubric (v3): each active finding scores minor = 1, major = 3, critical = 6 (worst finding per topic).
+# A repeat finding is raised one level; one affecting 3+ subjects (or site-wide) is raised one level, up to major.
 #   6+ points = high   -> any critical finding, or two major findings
 #   3-5 points = medium -> one major finding, or three or more minor findings
 #   0-2 points = low

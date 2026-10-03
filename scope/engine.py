@@ -17,7 +17,7 @@ import json
 import re
 import time
 
-from scope.llm import RUBRIC_TEXT, BadAnswer, _norm, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
+from scope.llm import ESCALATION_SUBJECTS, RUBRIC_TEXT, BadAnswer, _norm, final_severity, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
 from scope.record import build_record, normalize_date
 from scope.rules import RuleParser
 from scope.schema import ISSUE_BY_CODE, ISSUE_CODES
@@ -35,8 +35,15 @@ EXTRACT_SCHEMA = {
             "status": {"type": "STRING", "enum": STATUSES},
             "severity": {"type": "STRING", "enum": SEVERITIES},
             "evidence": {"type": "STRING"},
-            "explanation": {"type": "STRING"}},
-            "required": ["issue", "status", "severity", "evidence", "explanation"]}},
+            "explanation": {"type": "STRING"},
+            "repeat": {"type": "BOOLEAN"},
+            "subjects_affected": {"type": "INTEGER", "nullable": True},
+            "site_wide": {"type": "BOOLEAN"},
+            "escalation_evidence": {"type": "STRING"}},
+            "required": ["issue", "status", "severity", "evidence", "explanation", "repeat", "subjects_affected",
+                         "site_wide", "escalation_evidence"],
+            "propertyOrdering": ["issue", "status", "severity", "evidence", "explanation", "repeat",
+                                 "subjects_affected", "site_wide", "escalation_evidence"]}},
         "actions": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
             "owner": _STR, "action": {"type": "STRING"}, "due": _STR}, "required": ["action"]}},
         "summary": {"type": "STRING"},
@@ -87,7 +94,8 @@ ANSWER_1 = {
 EXAMPLE_2 = """IMV - Site 408 - 09/22/2026 - CRA: Priya Nair
 - Site manager refused to give me read access to the hospital EMR for Subject 408-011 (says new hospital policy). Could not verify the Week 8 visit or any of the AE source for this subject.
 - Pharmacy temp logs reviewed through 21-Sep, all within range.
-- 3 queries open > 30 days on the Week 4 labs page.
+- 3 queries open > 30 days on the Week 4 labs page, the same ones I flagged at the August visit.
+- Week 4 vital signs not yet entered in EDC for Subjects 408-002, 408-005 and 408-009.
 - Follow-up: PI to arrange EMR access for the monitor before the next visit on 10/20/2026. Escalated to the Sponsor study manager today."""  # noqa: E501
 
 ANSWER_2 = {
@@ -96,18 +104,25 @@ ANSWER_2 = {
     "findings": [
         {"issue": "SDV_BACKLOG", "status": "active", "severity": "critical",
          "evidence": "Site manager refused to give me read access to the hospital EMR for Subject 408-011",
-         "explanation": "The site refused access to source documents, so this subject's data cannot be verified."},
+         "explanation": "The site refused access to source documents, so this subject's data cannot be verified.",
+         "subjects_affected": 1},
         {"issue": "TEMP_EXCURSION", "status": "no_issue", "severity": "minor",
          "evidence": "Pharmacy temp logs reviewed through 21-Sep, all within range.",
          "explanation": "Storage temperatures were fine."},
         {"issue": "QUERY_AGING", "status": "active", "severity": "minor",
-         "evidence": "3 queries open > 30 days on the Week 4 labs page.",
-         "explanation": "A few aging queries remain open."},
+         "evidence": "3 queries open > 30 days on the Week 4 labs page",
+         "explanation": "A few aging queries remain open; they were already flagged at the previous visit.",
+         "repeat": True, "escalation_evidence": "the same ones I flagged at the August visit"},
+        {"issue": "DATA_ENTRY_BACKLOG", "status": "active", "severity": "minor",
+         "evidence": "Week 4 vital signs not yet entered in EDC for Subjects 408-002, 408-005 and 408-009.",
+         "explanation": "Vital signs pages are missing for three subjects.",
+         "subjects_affected": 3, "escalation_evidence": "for Subjects 408-002, 408-005 and 408-009"},
     ],
     "actions": [{"owner": "PI", "action": "arrange EMR access for the monitor",
                  "due": "before the next visit on 10/20/2026"}],
     "summary": "The site refused the monitor access to source records for one subject (critical) and the issue has "
-               "been escalated; the PI must restore EMR access before the next visit. Three queries are aging.",
+               "been escalated; the PI must restore EMR access before the next visit. Aging queries are a repeat "
+               "finding and vital signs are missing for three subjects.",
 }
 
 EXAMPLE_3 = """Hi Jen, quick recap of today's remote visit (Oct 2, 2026) for site 552. eCRF pages are current and SDV is up to date through Visit 6. One subject's Week 12 visit fell two days outside the window because of a holiday closure; the site has logged it as a minor deviation. No new AEs or SAEs since the last visit. Thanks, Marcus Lee"""  # noqa: E501
@@ -130,6 +145,13 @@ ANSWER_3 = {
     "summary": "Routine remote visit with data and SDV current. One minor out-of-window visit was logged as a "
                "deviation; nothing else is open.",
 }
+
+for _answer in (ANSWER_1, ANSWER_2, ANSWER_3):
+    for _f in _answer["findings"]:
+        for _k, _v in (("repeat", False), ("subjects_affected", None), ("site_wide", False),
+                       ("escalation_evidence", "")):
+            _f.setdefault(_k, _v)
+
 
 def _dump(answer: dict) -> str:
     return json.dumps({k: answer[k] for k in EXTRACT_SCHEMA["propertyOrdering"]})
@@ -155,6 +177,8 @@ Rules:
   corrections or reasoning inside a value.
 - "actions" are open follow-ups still to be done. owner, action and due are copied word for word from the note
   (due may be null). Completed tasks, things already done during the visit, and general reminders are not actions.
+- Give each finding its own severity from the rubric, then fill the escalation fields. Do not raise the severity
+  yourself for repeats or many subjects; SCOPE does that.
 - Do not invent anything. If the note does not say it, leave it out.
 - "summary": two sentences a study manager can read in ten seconds.
 
@@ -170,7 +194,7 @@ Example note:
 \"\"\"{EXAMPLE_3}\"\"\"
 Answer: {_dump(ANSWER_3)}"""
 
-ENGINE_REV = "5.3"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "6.0"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -271,8 +295,11 @@ TRIPWIRES = [
     ({"CONSENT"}, "a possible consent problem",
      r"before (?:\w+ ){0,3}(?:signed|signing) (?:the )?(?:ICF|consent)|without (?:a )?(?:signed )?(?:ICF|consent)"
      r"|verbal(?:ly)? consent|consented after|consent (?:was )?signed after"),
-    ({"PROTOCOL_DEVIATION", "IP_ACCOUNTABILITY"}, "a possible dosing error",
+    ({"DOSING_ERROR", "PROTOCOL_DEVIATION", "IP_ACCOUNTABILITY"}, "a possible dosing error",
      r"double dos|wrong dose|wrong kit|overdos|dosing error|dosed (?:in error|despite)"),
+    ({"ELIGIBILITY", "PROTOCOL_DEVIATION"}, "a possible eligibility problem",
+     r"\bineligible\b|did not meet (?:the )?(?:inclusion|exclusion|eligibility)|eligibility (?:violation|not met)"
+     r"|(?:inclusion|exclusion) criteri(?:on|a) (?:not met|violated)"),
     ({"REG_DOCS", "PROTOCOL_DEVIATION", "CONSENT"}, "a possible IRB approval lapse",
      r"IRB[^.\n]{0,60}\b(?:expired|lapsed)|(?:expired|lapsed)[^.\n]{0,30}IRB"),
 ]
@@ -353,6 +380,19 @@ class LLMParser:
             f["group"] = ISSUE_BY_CODE[f["issue"]].group
             loc = _find(text, f.get("evidence"))
             f["char_start"], f["char_end"] = loc if loc else (-1, -1)
+            try:
+                f["subjects_affected"] = int(f.get("subjects_affected")) if f.get("subjects_affected") else None
+            except (TypeError, ValueError):
+                f["subjects_affected"] = None
+            claims = bool(f.get("repeat") or f.get("site_wide") or (f["subjects_affected"] or 0) >= ESCALATION_SUBJECTS)
+            esc = str(f.get("escalation_evidence") or "")
+            # escalation only counts when the note really says it (in the escalation quote or the evidence itself)
+            f["escalation_ok"] = claims and bool(esc.strip() and verify_quote(esc, text)) or (
+                claims and not esc.strip() and f["verified"])
+            if claims and not f["escalation_ok"]:
+                problems.append(f"'{f['display']}' was reported as a repeat or widespread problem, but the quote "
+                                "for that is not in the note, so it was not raised")
+            f["final_severity"], f["escalated_by"] = final_severity(f)
             findings.append(f)
         unverified = [f for f in findings if not f["verified"]]
         if unverified:

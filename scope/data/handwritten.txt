@@ -4,9 +4,11 @@
 # wording, abbreviations, run-on sentences, typos). They are a small, hard test
 # of how the models generalise beyond the template data. All content is fictional.
 #
-# Risk follows the same rubric as the generator (v2): each active issue scores 1 (minor),
+# Labels follow severity rubric v3 (22 issue types): each active issue scores 1 (minor),
 # 3 (major) or 6 (critical); 6+ points = high, 3-5 = medium, 0-2 = low. Late or unreported
-# SAEs are critical.
+# SAEs are critical. Relabelled by the CRA for v3 (2026-10-03): hw-07 dosing error, hw-22 eligibility,
+# hw-20 high (undelegated staff running visits = critical), hw-23 medium (expired CAP certificate = major,
+# facility and equipment), hw-24 high (uncounted returns = dosing compliance not reconciled, major).
 #
 # Format: a block starts with "=== <id>", then "risk:" and "issues:" lines, then
 # "---", then the note. Spans are marked [[text|LABEL]].
@@ -73,7 +75,7 @@ couldnt finish SDV because the EMR login expired again - got through maybe 40%.
 
 === hw-07
 risk: high
-issues: PROTOCOL_DEVIATION, IP_ACCOUNTABILITY
+issues: DOSING_ERROR, IP_ACCOUNTABILITY
 ---
 [[For-cause visit|VISIT_TYPE]] at [[Site 2210|SITE]], [[April 2, 2026|VISIT_DATE]], requested after the sponsor saw the dosing data. Confirmed that two subjects took double doses for most of March because the pharmacy dispensed two kits at once. Accountability logs do not match the IRT - 5 kits unaccounted for.
 Next steps: [[Pharmacy|OWNER]] to [[do a full kit reconciliation against IRT|ACTION]] by [[4/9/2026|DUE]]; [[Site|OWNER]] to [[report both dosing deviations to the IRB|ACTION]] within [[5 days|DUE]].
@@ -177,7 +179,7 @@ safety/consent: ok
 [[Site|OWNER]] - [[answer lab range queries|ACTION]] - [[24.03.2026|DUE]]
 
 === hw-20
-risk: medium
+risk: high
 issues: STAFF_TURNOVER, REG_DOCS
 ---
 [[Site 486|SITE]] had an [[interim monitoring visit|VISIT_TYPE]] on [[February 3, 2026|VISIT_DATE]]. Two research nurses joined in January and are running visits, but neither is on the delegation log yet and their CVs are not filed. Other than that the visit went well, [[16|SCREENED]] screened and [[10|ENROLLED]] randomized, no data or safety concerns.
@@ -192,7 +194,7 @@ issues:
 
 === hw-22
 risk: high
-issues: PROTOCOL_DEVIATION, PI_OVERSIGHT, SAE_REPORTING
+issues: ELIGIBILITY, PI_OVERSIGHT, SAE_REPORTING
 ---
 [[IMV|VISIT_TYPE]] [[Site 3340|SITE]] [[21-Jan-2026|VISIT_DATE]], CRA [[J. Walsh|MONITOR]]
 Subject 3340-009 was randomized with an eGFR below the exclusion cutoff - PI signed eligibility without looking at the lab. Same subject later had a grade 3 kidney injury that was entered as an AE, not an SAE, even though they were hospitalized 2 nights.
@@ -201,15 +203,15 @@ Subject 3340-009 was randomized with an eGFR below the exclusion cutoff - PI sig
 [[PI|OWNER]] to [[re-review eligibility for all subjects randomized since November|ACTION]]
 
 === hw-23
-risk: low
-issues: REG_DOCS
+risk: medium
+issues: FACILITY_EQUIPMENT
 ---
 [[SIV|VISIT_TYPE]] [[Site 1999|SITE]] [[03/02/2026|VISIT_DATE]] - went well, staff engaged. Only open item: lab certification (CAP) for the local lab expired last month, need the renewed cert in the binder.
 [[Site|OWNER]] to [[send updated CAP certificate|ACTION]] by [[03/16/2026|DUE]]
 
 === hw-24
-risk: medium
-issues: IP_ACCOUNTABILITY
+risk: high
+issues: IP_ACCOUNTABILITY, DOSING_ERROR
 ---
 Visit summary - [[on-site IMV|VISIT_TYPE]], [[Site 731|SITE]], [[11 March 2026|VISIT_DATE]]. Kit 44120 was assigned to 731-003 in IRT but dispensed to 731-005. Both subjects are on active drug so no unblinding risk, but it needs to be documented. Returned bottles were also not counted for the last two visits.
 [[Pharmacy|OWNER]] to [[document the kit swap|ACTION]] by [[18 March 2026|DUE]]

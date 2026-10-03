@@ -43,18 +43,22 @@ note ─► LLM (Google Gemini): instructions + severity rubric + three worked e
 
 The first version used a fine-tuned BERT model (results below). It was near-perfect on generated notes and caught 7 of 8 high-risk hand-written notes, but a real-style formal report broke it: a routine visit where consent, SDV, drug accountability and storage were all confirmed fine, and one data-entry gap was fixed on site, came back as **high risk at 100% confidence**. The model had learned that mentioning a topic usually means a problem. Real reports mention every topic, mostly to say it is fine, and judging that is reading comprehension, which is what large language models do well. The fine-tuned model and its training pipeline stay in the repository as the baseline.
 
-### Severity rubric
+### Severity rubric (v3)
 
-Each active finding scores 1 (minor), 3 (major) or 6 (critical): any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Critical findings include a late or unreported SAE, procedures before consent, an ineligible subject dosed, dosing errors, expired or compromised IP being used, enrolling after IRB approval lapsed, untrained staff running visits, and refusal of source access; they stay active even when a CAPA is in place. Findings corrected and verified during the visit do not count.
+The rubric was written and approved by an experienced CRA. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
 
-### Issue types
+Two escalation rules weigh a problem the way a CRA does. A **repeat finding** (also found at an earlier visit, or an earlier action still open) is raised one level. A problem affecting **3 or more subjects**, or described as site-wide, is raised one level, up to major. Both can apply, so a minor gap that affects five subjects and was cited last visit becomes critical. The LLM only reports the facts (repeat, number of subjects, and a quote showing it); SCOPE applies the rules, and only when the quote is really in the note.
+
+### Issue types (22)
 
 | Group | Issues |
 |---|---|
-| Data & queries | data entry backlog, open/aging queries, source data verification behind |
-| Patient safety & consent | late or missing SAE reporting, informed consent issue |
-| Protocol & drug | protocol deviation, IP accountability, IP temperature excursion |
-| Site operations | staff turnover / training gap, PI oversight gap, enrollment behind target, regulatory binder / essential documents |
+| Patient safety & consent | late or missing SAE reporting, adverse event recording, informed consent, eligibility, safety reports to IRB and PI, blinding |
+| Protocol & drug | protocol deviation, dosing error, IP accountability, IP storage and temperature, lab samples and kits |
+| Data quality | data entry backlog, open or aging queries, SDV and source access, source documentation |
+| Site operations | staff, training and delegation, PI oversight, enrollment, regulatory and essential documents, facility and equipment, follow-up of prior findings, site engagement |
+
+Each issue type has minor, major and critical examples in `scope/llm.py` (`RUBRIC_TEXT`). The v1 baseline model keeps its original 12 issue types.
 
 
 ## Setup (free Gemini API key)

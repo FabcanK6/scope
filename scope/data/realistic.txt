@@ -73,7 +73,7 @@ I retrained both the PI and the primary SC on SAE definition and reporting timel
 
 === real-06
 risk: medium
-issues: PROTOCOL_DEVIATION
+issues: CONSENT
 ---
 Monitor: [[Lena Fischer|MONITOR]], CRA
 Visit Type: [[Interim Monitoring Visit|VISIT_TYPE]] (IMV)

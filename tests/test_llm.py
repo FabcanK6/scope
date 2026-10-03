@@ -234,6 +234,51 @@ class TestLLM(unittest.TestCase):
             client.generate("s", "p")
         self.assertIn("27 seconds", str(ctx.exception))
 
+    def test_rubric_v3_escalation(self):
+        from scope.llm import final_severity
+
+        def f(sev, **kw):
+            return final_severity({"severity": sev, "escalation_ok": True, **kw})
+
+        self.assertEqual(f("minor"), ("minor", []))
+        self.assertEqual(f("minor", subjects_affected=3), ("major", ["3 subjects affected"]))
+        self.assertEqual(f("minor", subjects_affected=2), ("minor", []))
+        self.assertEqual(f("major", site_wide=True), ("major", []))  # spread raises up to major only
+        self.assertEqual(f("major", repeat=True), ("critical", ["repeat finding"]))
+        self.assertEqual(f("minor", subjects_affected=5, repeat=True),
+                         ("critical", ["5 subjects affected", "repeat finding"]))  # both rules stack
+        self.assertEqual(f("critical", repeat=True), ("critical", []))
+        self.assertEqual(final_severity({"severity": "minor", "repeat": True, "escalation_ok": False}),
+                         ("minor", []))
+
+    def test_escalation_needs_evidence_in_note(self):
+        from scope.engine import LLMParser
+
+        note = ("IMV 03/02/2026. Con-meds not entered for Subjects 101, 102 and 103. "
+                "Two queries still open from the last visit.")
+        answer = {"visit": {}, "actions": [], "summary": "Data gaps.",
+                  "findings": [
+                      {"issue": "DATA_ENTRY_BACKLOG", "status": "active", "severity": "minor",
+                       "evidence": "Con-meds not entered for Subjects 101, 102 and 103.", "explanation": "",
+                       "repeat": False, "subjects_affected": 3, "site_wide": False,
+                       "escalation_evidence": "for Subjects 101, 102 and 103"},
+                      {"issue": "QUERY_AGING", "status": "active", "severity": "minor",
+                       "evidence": "Two queries still open from the last visit.", "explanation": "",
+                       "repeat": True, "subjects_affected": None, "site_wide": False,
+                       "escalation_evidence": "cited in the previous three reports"}]}  # not in the note
+        rec = LLMParser(FakeClient([fake_response(answer)])).analyze(note)
+        sev = {f["issue"]: f["final_severity"] for f in rec["findings"]}
+        self.assertEqual(sev, {"DATA_ENTRY_BACKLOG": "major", "QUERY_AGING": "minor"})
+        self.assertEqual(rec["risk"]["level"], "medium")  # 3 + 1 points
+        self.assertTrue(any("not raised" in r for r in rec["review"]["reasons"]))
+
+    def test_v1_baseline_keeps_its_12_issue_types(self):
+        from scope.schema import ISSUE_CODES, V1_ISSUE_CODES
+
+        self.assertEqual(len(V1_ISSUE_CODES), 12)
+        self.assertEqual(len(ISSUE_CODES), 22)
+        self.assertTrue(set(V1_ISSUE_CODES) <= set(ISSUE_CODES))
+
     def test_letter(self):
         from scope.predict import RuleBasedParser
 

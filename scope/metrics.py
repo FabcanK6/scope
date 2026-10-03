@@ -105,10 +105,12 @@ def evaluate_predictions(rows: list[dict], preds: list[dict], by_style: bool = T
             fp[c] += 1
         for c in g - q:
             fn[c] += 1
-    per_issue = {c: prf(tp[c], fp[c], fn[c]) for c in ISSUE_CODES}
+    # only issue types that occur (in the labels or the predictions) count towards the macro average
+    seen = [c for c in ISSUE_CODES if tp[c] + fp[c] + fn[c]]
+    per_issue = {c: prf(tp[c], fp[c], fn[c]) for c in seen}
     issues = {
         "micro": prf(sum(tp.values()), sum(fp.values()), sum(fn.values())),
-        "macro_f1": sum(m["f1"] for m in per_issue.values()) / len(ISSUE_CODES),
+        "macro_f1": sum(m["f1"] for m in per_issue.values()) / len(seen) if seen else 0.0,
         "exact_set_match": exact_sets / n if n else 0.0,
         "per_issue": per_issue,
     }

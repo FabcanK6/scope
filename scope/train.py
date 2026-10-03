@@ -28,7 +28,7 @@ from scope.data.generate import read_jsonl
 from scope.metrics import evaluate_predictions, format_report
 from scope.model import CONFIG_NAME, ScopeModel, encode_words, fit_temperature, pick_device
 from scope.predict import BertParser
-from scope.schema import ISSUE2ID, ISSUE_CODES, RISK2ID
+from scope.schema import ISSUE2ID, V1_ISSUE_CODES, RISK2ID
 
 PREFIX_SPACE_MODELS = {"roberta", "deberta", "deberta-v2", "longformer", "gpt2", "bart"}
 
@@ -50,7 +50,7 @@ def make_collate(tokenizer, max_length: int):
     def collate(rows: list[dict]):
         enc, _ = encode_words(tokenizer, [r["tokens"] for r in rows], max_length, [r["tags"] for r in rows])
         enc["risk_labels"] = torch.tensor([RISK2ID[r["risk"]] for r in rows], dtype=torch.long)
-        issues = torch.zeros(len(rows), len(ISSUE_CODES))
+        issues = torch.zeros(len(rows), len(V1_ISSUE_CODES))
         for i, r in enumerate(rows):
             for c in r["issues"]:
                 issues[i, ISSUE2ID[c]] = 1.0

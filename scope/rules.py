@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 
 from scope.data.templates import FORMAL_VISIT_TITLES, VISIT_TYPE_SURFACES
-from scope.schema import ISSUE_CODES, SEVERITY_POINTS, risk_from_points
+from scope.schema import V1_ISSUE_CODES, SEVERITY_POINTS, risk_from_points
 from scope.text import bio_to_spans, char_spans_to_bio, sentences, tokenize
 
 _MONTH = r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*"
@@ -202,7 +202,7 @@ class RuleParser:
                 continue  # section headings like "Informed consent and safety"
             if NEGATION_RE.search(sent):
                 continue
-            hits = [c for c in ISSUE_CODES if _ISSUE_RES[c].search(sent)]
+            hits = [c for c in V1_ISSUE_CODES if _ISSUE_RES[c].search(sent)]
             if "TEMP_EXCURSION" in hits and "IP_ACCOUNTABILITY" in hits:
                 hits.remove("IP_ACCOUNTABILITY")
             if not hits:
@@ -225,7 +225,7 @@ class RuleParser:
             risk = {"moderate": "medium"}.get(m.group(1).lower(), m.group(1).lower())
         else:
             risk = risk_from_points(sum(SEVERITY_POINTS[s] for s in severities.values()))
-        issues = [c for c in ISSUE_CODES if c in severities]
+        issues = [c for c in V1_ISSUE_CODES if c in severities]
         return {
             "tokens": tokens, "tags": tags, "spans": bio_to_spans(tokens, tags, text),
             "risk": risk, "risk_probs": {}, "issues": issues, "issue_probs": {c: 1.0 for c in issues},

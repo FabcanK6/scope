@@ -19,7 +19,7 @@ import torch
 from torch import nn
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 
-from scope.schema import BIO_LABELS, ISSUE_CODES, LABEL2ID, RISK_LEVELS
+from scope.schema import BIO_LABELS, V1_ISSUE_CODES, LABEL2ID, RISK_LEVELS
 
 WEIGHTS_NAME = "scope_model.pt"
 CONFIG_NAME = "scope_config.json"
@@ -33,7 +33,7 @@ class ScopeModel(nn.Module):
         hidden = encoder.config.hidden_size
         self.dropout = nn.Dropout(dropout)
         self.risk_head = nn.Linear(hidden, len(RISK_LEVELS))
-        self.issue_head = nn.Linear(hidden, len(ISSUE_CODES))
+        self.issue_head = nn.Linear(hidden, len(V1_ISSUE_CODES))
         self.tag_head = nn.Linear(hidden, len(BIO_LABELS))
         self.issue_loss_weight = issue_loss_weight
         self.tag_loss_weight = tag_loss_weight
@@ -75,7 +75,7 @@ class ScopeModel(nn.Module):
         cfg = {
             "base_model": base_model,
             "risk_levels": RISK_LEVELS,
-            "issue_codes": ISSUE_CODES,
+            "issue_codes": V1_ISSUE_CODES,
             "bio_labels": BIO_LABELS,
             "max_length": max_length,
             "dropout": self.dropout.p,
@@ -89,7 +89,7 @@ class ScopeModel(nn.Module):
     def load(cls, model_dir: str | Path, device: str | torch.device = "cpu"):
         model_dir = Path(model_dir)
         cfg = json.loads((model_dir / CONFIG_NAME).read_text())
-        if (cfg["risk_levels"], cfg["issue_codes"], cfg["bio_labels"]) != (RISK_LEVELS, ISSUE_CODES, BIO_LABELS):
+        if (cfg["risk_levels"], cfg["issue_codes"], cfg["bio_labels"]) != (RISK_LEVELS, V1_ISSUE_CODES, BIO_LABELS):
             raise ValueError("Checkpoint label set differs from scope.schema; retrain or restore the old schema.")
         encoder = AutoModel.from_config(AutoConfig.from_pretrained(model_dir))
         model = cls(encoder, dropout=cfg.get("dropout", 0.1))

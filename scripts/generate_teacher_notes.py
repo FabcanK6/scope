@@ -29,7 +29,7 @@ from scope.data.generate import sample_note  # noqa: E402
 from scope.data.handwritten import parse_marked  # noqa: E402
 from scope.llm import RUBRIC_TEXT, GeminiClient, LLMError, get_api_key, verify_quote  # noqa: E402
 from scope.record import assemble_actions  # noqa: E402
-from scope.schema import ENTITY_TYPES, ISSUE_BY_CODE, ISSUE_CODES  # noqa: E402
+from scope.schema import ENTITY_TYPES, ISSUE_BY_CODE, V1_ISSUE_CODES  # noqa: E402
 from scope.text import bio_to_spans, char_spans_to_bio, tokenize  # noqa: E402
 
 STYLES = [
@@ -62,7 +62,7 @@ SCHEMA = {
     "properties": {
         "note": {"type": "STRING"},
         "findings": {"type": "ARRAY", "items": {"type": "OBJECT", "properties": {
-            "issue": {"type": "STRING", "enum": ISSUE_CODES},
+            "issue": {"type": "STRING", "enum": V1_ISSUE_CODES},
             "status": {"type": "STRING", "enum": ["active", "resolved_on_site", "no_issue"]},
             "severity": {"type": "STRING", "enum": ["minor", "major", "critical"]},
             "evidence": {"type": "STRING"}},

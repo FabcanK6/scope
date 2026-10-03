@@ -55,7 +55,7 @@ class BertParser:
         import torch
 
         from scope.model import encode_words
-        from scope.schema import ID2LABEL, ISSUE_CODES, RISK_LEVELS
+        from scope.schema import ID2LABEL, V1_ISSUE_CODES, RISK_LEVELS
 
         self.model.eval()
         results = []
@@ -73,11 +73,11 @@ class BertParser:
             for b, (text, toks) in enumerate(zip(chunk, token_lists)):
                 tags = [ID2LABEL[tag_ids[b][t]] if t is not None else "O" for t in firsts[b]][:len(toks)]
                 probs = dict(zip(RISK_LEVELS, risk_p[b]))
-                issue_probs = dict(zip(ISSUE_CODES, issue_p[b]))
+                issue_probs = dict(zip(V1_ISSUE_CODES, issue_p[b]))
                 pred = {
                     "tokens": toks, "tags": tags, "spans": bio_to_spans(toks, tags, text),
                     "risk": max(probs, key=probs.get), "risk_probs": probs,
-                    "issues": [c for c in ISSUE_CODES if issue_probs[c] >= self.threshold],
+                    "issues": [c for c in V1_ISSUE_CODES if issue_probs[c] >= self.threshold],
                     "issue_probs": issue_probs, "truncated": any(t is None for t in firsts[b]),
                     "backend": self.name,
                 }

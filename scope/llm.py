@@ -206,22 +206,79 @@ class GeminiClient:
 # ---------------------------------------------------------------------------
 # Second opinion
 # ---------------------------------------------------------------------------
-RUBRIC_TEXT = """Severity rubric (from an experienced clinical research associate):
-- critical: SAE unreported or reported late (outside 24 hours); study procedures before consent or no signed ICF;
-  ineligible subject dosed; dosing errors (wrong dose, dosed despite a hold criterion); expired investigational
-  product, or product used after a temperature excursion before Sponsor assessment; enrolling after IRB approval
-  lapsed; untrained staff running study visits; site refuses access to source documents.
-- major: outdated ICF version in use or re-consent overdue (still major and "active" when the subject was
-  re-consented during the visit, because the deviation happened); important protocol deviations; kits unaccounted for
-  or wrong kit dispensed; temperature excursion not reported or logs not kept; staff not on the delegation log; PI not
-  signing labs or casebooks; large data entry or query backlog (60+ days); essential documents or approvals missing
-  (1572, amendment approval, licenses, or a pending IRB approval that blocks screening); enrollment far behind
-  target.
-- minor: single out-of-window visit; a concomitant medication not yet entered; a few pages or queries open; missing
-  time of signature on an ICF; one unsigned CV; brief excursion with no product impact; supply shortages.
+RUBRIC_TEXT = """Severity rubric v3 (approved by an experienced clinical research associate).
+Rate each finding on its own facts; repeats and spread are recorded separately (see the escalation fields)
+and SCOPE applies those itself.
+- SAE_REPORTING. minor: SAE form detail wrong, corrected. major: SAE follow-up report overdue; PI causality not
+  documented. critical: SAE unreported, or reported outside 24 hours (stays critical even with a CAPA).
+- AE_REPORTING. minor: one AE entered late. major: AEs missing from EDC; grading or causality not assessed by the PI.
+- CONSENT. minor: missing time of signature; initials missing on a page. major: outdated ICF version used (major even
+  if the subject was re-consented during the visit); re-consent overdue. critical: study procedures before consent;
+  no signed ICF.
+- ELIGIBILITY. minor: eligibility checklist unsigned but criteria met. major: eligibility evidence missing from source
+  at randomization. critical: ineligible subject randomized or dosed.
+- SAFETY_REPORTS. minor: IND safety reports filed late in the ISF. major: safety reports not reviewed by the PI or not
+  sent to the IRB.
+- UNBLINDING. major: blinded staff could see unblinded documents, no unblinding. critical: unplanned unblinding not
+  reported.
+- PROTOCOL_DEVIATION. minor: a single out-of-window visit. major: important deviations; missed safety assessments;
+  deviations not logged.
+- DOSING_ERROR. minor: dosing time not recorded. major: missed doses undocumented; compliance not reconciled
+  (including returned doses not counted).
+  critical: wrong dose, double dose, or dosed despite a hold criterion.
+- IP_ACCOUNTABILITY. minor: small count difference explained on site. major: kits unaccounted for; wrong kit
+  dispensed. critical: expired investigational product dispensed.
+- TEMP_EXCURSION. minor: brief excursion with no product impact, reported. major: excursion not reported; logs not
+  kept. critical: product used after an excursion before Sponsor assessment.
+- LAB_SAMPLES. minor: lab kit supplies running low. major: samples mishandled or not shipped; central lab results not
+  reviewed.
+- DATA_ENTRY_BACKLOG. minor: a few pages or one concomitant medication not entered. major: backlog older than 60 days,
+  or a large volume (about 25 or more pages not entered).
+- QUERY_AGING. minor: a few queries open. major: many queries open more than 60 days, or 10 or more queries older
+  than 30 days.
+- SDV_BACKLOG. minor: SDV slightly behind plan. major: SDV far behind; the monitor's EMR access lapsed. critical: the
+  site refuses access to source documents.
+- SOURCE_DOCS. minor: corrections not initialed or dated. major: source missing or contradicts EDC; ALCOA+ failures.
+  critical: falsified or back-dated records.
+- STAFF_TURNOVER (staff, training and delegation). minor: one CV or GCP certificate expired. major: staff not on the
+  delegation log; turnover with no backup. critical: untrained or undelegated staff performing study procedures.
+- PI_OVERSIGHT. minor: one late sign-off. major: PI not signing labs or eCRFs; PI unavailable to the team.
+- ENROLLMENT_LAG. minor: slightly behind target. major: far behind target.
+- REG_DOCS. minor: one document misfiled. major: missing 1572, amendment approval or licenses; a pending IRB approval
+  that blocks screening. critical: enrolling after IRB approval lapsed.
+- FACILITY_EQUIPMENT. minor: calibration due soon. major: equipment out of calibration; lab certification (CLIA/CAP)
+  expired.
+- PRIOR_ACTIONS (follow-up of prior findings). minor: one prior action slightly overdue. major: prior actions not done;
+  CAPA not implemented.
+- SITE_ENGAGEMENT. minor: slow replies to the monitor. major: unresponsive for weeks; repeated visit cancellations.
 Status: "active" = a problem that still exists after the visit. "resolved_on_site" = it was corrected and verified
 during the visit. "no_issue" = the topic is mentioned only to confirm it is fine. Critical findings stay "active" even
-when a CAPA is in place."""
+when a CAPA is in place.
+Escalation fields (facts only, SCOPE does the scoring): "repeat" = true only when the note says this problem was also
+found at an earlier visit or an earlier action on it is still open. "subjects_affected" = how many subjects the note
+says the problem affects (null if not stated). "site_wide" = true when the note describes it as site-wide or
+systemic. "escalation_evidence" = the words from the note that show the repeat or the spread ("" if neither)."""
+
+ESCALATION_SUBJECTS = 3  # a problem affecting this many subjects or more is raised one level (up to major)
+
+
+def final_severity(f: dict) -> tuple[str, list[str]]:
+    """Rubric v3 escalation: many subjects (3+ or site-wide) raises one level up to major; a repeat finding raises
+    one level. Both can apply. Only counted when the escalation evidence is really in the note (``escalation_ok``)."""
+    level = SEVERITIES.index(f["severity"])
+    reasons = []
+    if f.get("escalation_ok"):
+        n = f.get("subjects_affected")
+        if (isinstance(n, int) and n >= ESCALATION_SUBJECTS) or f.get("site_wide"):
+            if level < SEVERITIES.index("major"):
+                level += 1
+                reasons.append(f"{n} subjects affected" if isinstance(n, int) and n >= ESCALATION_SUBJECTS
+                               else "site-wide")
+        if f.get("repeat") and level < len(SEVERITIES) - 1:
+            level += 1
+            reasons.append("repeat finding")
+    return SEVERITIES[level], reasons
+
 
 def _message(detail: str) -> str:
     """The human-readable part of a Gemini error body (falls back to the raw text)."""
@@ -249,13 +306,14 @@ def verify_quote(quote: str, note: str) -> bool:
 
 
 def score_findings(findings: list[dict]) -> dict:
-    """Apply SCOPE's rubric to verified, active findings (highest severity per issue type)."""
+    """Apply SCOPE's rubric to verified, active findings (highest final severity per issue type)."""
     worst: dict[str, str] = {}
     for f in findings:
         if f["status"] != "active" or not f.get("verified"):
             continue
-        if f["issue"] not in worst or SEVERITY_POINTS[f["severity"]] > SEVERITY_POINTS[worst[f["issue"]]]:
-            worst[f["issue"]] = f["severity"]
+        sev = f.get("final_severity", f["severity"])
+        if f["issue"] not in worst or SEVERITY_POINTS[sev] > SEVERITY_POINTS[worst[f["issue"]]]:
+            worst[f["issue"]] = sev
     points = sum(SEVERITY_POINTS[s] for s in worst.values())
     return {"risk": risk_from_points(points), "points": points, "active": worst}
 
@@ -276,7 +334,8 @@ def draft_followup(client: GeminiClient, record: dict) -> str:
     facts = {
         "visit_type": v["visit_type"]["name"], "visit_date": v["visit_date"]["iso"] or v["visit_date"]["text"],
         "site": v["site"]["text"], "monitor": v["monitor"], "pi": v["pi"], "risk_level": record["risk"]["level"],
-        "findings": [{k: f[k] for k in ("display", "status", "severity", "evidence")}
+        "findings": [{"display": f["display"], "status": f["status"], "evidence": f["evidence"],
+                      "severity": f.get("final_severity", f["severity"]), "raised_because": f.get("escalated_by", [])}
                      for f in record.get("findings", []) if f.get("verified") and f["status"] != "no_issue"],
         "action_items": [{k: a[k] for k in ("action", "owner", "due")} for a in record["actions"]],
     }

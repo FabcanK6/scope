@@ -21,7 +21,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from scope.data import templates as T
-from scope.schema import ISSUE_BY_CODE, ISSUE_CODES, SEVERITY_POINTS, risk_from_points
+from scope.schema import ISSUE_BY_CODE, V1_ISSUE_CODES, SEVERITY_POINTS, risk_from_points
 from scope.text import char_spans_to_bio, tokenize
 
 _SLOT_RE = re.compile(r"\[\[(\w+):(\w+)\]\]|\{(\w+)\}")
@@ -143,7 +143,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
     }
 
     # --- issues --------------------------------------------------------------
-    candidates = list(T.VISIT_TYPE_ISSUES.get(vt, ISSUE_CODES))
+    candidates = list(T.VISIT_TYPE_ISSUES.get(vt, V1_ISSUE_CODES))
     if vt == "COV":
         candidates.remove("ENROLLMENT_LAG")
     if formal:  # real reports: mostly clean, many topics confirmed as fine
@@ -285,7 +285,7 @@ def sample_note(rng: random.Random, unseen: bool = False, style: str | None = No
         add_t(S.pick(T.EMAIL_SIGNOFFS), "\n\n")
 
     return _finalize(nb, {
-        "style": style, "unseen": unseen, "risk": risk, "issues": sorted(severities, key=ISSUE_CODES.index),
+        "style": style, "unseen": unseen, "risk": risk, "issues": sorted(severities, key=V1_ISSUE_CODES.index),
         "severities": severities, "inactive": inactive, "actions": actions,
         "meta": {"visit_type": vt, "visit_date": visit_date.isoformat(), "site_id": str(site_id),
                  "monitor": values["cra"], "pi": values["pi"], "screened": None if vt == "SIV" else ns,

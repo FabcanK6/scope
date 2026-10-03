@@ -133,8 +133,9 @@ def highlight(text: str, rec: dict) -> str:
     regions = []
     for f in rec.get("findings", []):
         if f.get("verified") and f.get("char_start", -1) >= 0:
-            color = SEVERITY_COLORS[f["severity"]] if f["status"] == "active" else STATUS_COLORS[f["status"]]
-            label = f"{f['display']} · {f['severity'] if f['status'] == 'active' else f['status'].replace('_', ' ')}"
+            sev = f.get("final_severity", f["severity"])
+            color = SEVERITY_COLORS[sev] if f["status"] == "active" else STATUS_COLORS[f["status"]]
+            label = f"{f['display']} · {sev if f['status'] == 'active' else f['status'].replace('_', ' ')}"
             regions.append((f["char_start"], f["char_end"], color, label))
     for sp in rec["spans"]:
         if sp["label"] in ("ACTION", "OWNER", "DUE", "VISIT_DATE", "VISIT_TYPE", "SITE"):
@@ -153,14 +154,19 @@ def highlight(text: str, rec: dict) -> str:
 
 
 def findings_table(rec: dict, status: str) -> pd.DataFrame:
-    rows = [{"Issue": f["display"], "Severity": f["severity"], "Evidence (quoted from the note)": f["evidence"],
-             "Why": f.get("explanation", "")}
+    rows = [{"Issue": f["display"], "Severity": f.get("final_severity", f["severity"]),
+             "Raised because": ", ".join(f.get("escalated_by") or []),
+             "Evidence (quoted from the note)": f["evidence"], "Why": f.get("explanation", "")}
             for f in rec.get("findings", []) if f["status"] == status and f.get("verified")]
     order = {"critical": 0, "major": 1, "minor": 2}
     rows.sort(key=lambda r: order.get(r["Severity"], 3))
     if status != "active":
         for r in rows:
             r.pop("Severity")
+            r.pop("Raised because")
+    elif not any(r["Raised because"] for r in rows):
+        for r in rows:
+            r.pop("Raised because")
     return pd.DataFrame(rows)
 
 
@@ -188,9 +194,10 @@ with st.sidebar:
             "**fixed during the visit**, or **confirmed fine**, each with a quote from the note.\n"
             "2. SCOPE checks every quote, name, date and action against the note and drops anything that is "
             "not there.\n"
-            "3. SCOPE applies the severity rubric: any critical finding or two major findings = high; one major "
-            "or three minor = medium; otherwise low. Late or unreported SAEs, consent after procedures and "
-            "dosing errors are critical.\n"
+            "3. SCOPE applies the severity rubric (22 topics): any critical finding or two major findings = "
+            "high; one major or three minor = medium; otherwise low. Late or unreported SAEs, consent after "
+            "procedures and dosing errors are critical. A repeat finding is raised one level, and so is a problem "
+            "affecting 3 or more subjects (up to major); both can apply.\n"
             "4. Safety net: an empty or garbled answer from the LLM is asked again and never scored, and if the note "
             "mentions a possible SAE, consent problem, dosing error or IRB lapse that the LLM did not report, SCOPE "
             "shows a red safety alert.")

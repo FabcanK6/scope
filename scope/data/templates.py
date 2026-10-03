@@ -438,7 +438,7 @@ DISTRACTORS = [
 RISK_LINES = ["Overall site risk: {risk_word}.", "Risk assessment: {risk_word}", "Site risk level - {risk_word}"]
 
 REPORT_SECTIONS = {
-    "Data & queries": ["Data Management", "Data quality", "EDC and queries"],
+    "Data quality": ["Data Management", "Data quality", "EDC and queries"],
     "Patient safety & consent": ["Safety and Consent", "Subject safety", "Informed consent and safety"],
     "Protocol & drug": ["Protocol Compliance and IP", "Protocol and investigational product", "IP and deviations"],
     "Site operations": ["Site Operations", "Site staff and documents", "Site management"],
