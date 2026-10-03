@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT))
 
 from scope.data.generate import read_jsonl  # noqa: E402
 from scope.data.handwritten import load_handwritten, load_realistic  # noqa: E402
-from scope.engine import SYSTEM, LLMParser  # noqa: E402
+from scope.engine import ENGINE_REV, SYSTEM, LLMParser  # noqa: E402
 from scope.llm import GeminiClient, LLMError, draft_followup, get_api_key  # noqa: E402
 from scope.record import audit_summary, to_row  # noqa: E402
 from scope.schema import ISSUE_BY_CODE, ISSUE_GROUPS  # noqa: E402
@@ -33,7 +33,8 @@ SEVERITY_COLORS = {"critical": "#C62828", "major": "#ED6C02", "minor": "#B8860B"
 STATUS_COLORS = {"resolved_on_site": "#1565C0", "no_issue": "#2E7D32"}
 MAX_NEW_CALLS = 25  # new LLM requests per browser session (cached answers are free)
 PORTFOLIO_MAX = 10
-ENGINE_VERSION = hashlib.sha256(SYSTEM.encode()).hexdigest()[:8]  # a new prompt never reuses old cached answers
+# a new prompt or engine revision never reuses old cached answers
+ENGINE_VERSION = hashlib.sha256((ENGINE_REV + SYSTEM).encode()).hexdigest()[:8]
 
 st.set_page_config(page_title="SCOPE - Site Visit Note Intelligence", page_icon="🩺", layout="wide")
 
@@ -182,7 +183,10 @@ with st.sidebar:
             "not there.\n"
             "3. SCOPE applies the severity rubric: any critical finding or two major findings = high; one major "
             "or three minor = medium; otherwise low. Late or unreported SAEs, consent after procedures and "
-            "dosing errors are critical.")
+            "dosing errors are critical.\n"
+            "4. Safety net: an empty or garbled answer from the LLM is asked again and never scored, and if the note "
+            "mentions a possible SAE, consent problem, dosing error or IRB lapse that the LLM did not report, SCOPE "
+            "shows a red safety alert.")
 
 parser = get_parser()
 tab_one, tab_batch, tab_check = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check"])
@@ -208,10 +212,13 @@ with tab_one:
         c2.metric("Site", v["site"]["id"] or "-")
         c3.metric("Visit date", v["visit_date"]["iso"] or (v["visit_date"]["text"] or "-"))
         c4.metric("Visit type", v["visit_type"]["code"] or "-")
+        for alert in rec.get("alerts", []):
+            st.error("**Safety check:** " + alert)
         if rec.get("summary"):
             st.markdown(f"> {rec['summary']}")
-        if rec["review"]["needed"]:
-            st.warning("**Check before relying on this:** " + "; ".join(rec["review"]["reasons"]) + ".")
+        others = [r for r in rec["review"]["reasons"] if r not in rec.get("alerts", [])]
+        if others:
+            st.warning("**Check before relying on this:** " + "; ".join(others) + ".")
 
         t_find, t_note, t_act, t_letter, t_sim, t_audit, t_json = st.tabs(
             ["Findings", "Highlighted note", "Visit details & actions", "Follow-up letter", "Similar past visits",
@@ -320,7 +327,8 @@ with tab_batch:
             df = pd.DataFrame([to_row(r) for r in recs])
             c1, c2, c3 = st.columns(3)
             c1.metric("Visits", len(df))
-            c2.metric("High risk", int((df["risk"] == "high").sum()))
+            c2.metric("High risk", int((df["risk"] == "high").sum()),
+                      help=f"{int(df['safety_alert'].sum())} visit(s) also have a safety alert to check by hand")
             c3.metric("Open action items", int(df["n_actions"].sum()))
             counts = pd.DataFrame([{"issue": i["display"], "group": i["group"]} for r in recs for i in r["issues"]])
             if not counts.empty:
@@ -370,7 +378,8 @@ with tab_check:
                               "CRA risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
                               "Risk agrees": "yes" if r["risk"] == rec["risk"]["level"] else "NO",
                               "CRA issues": names(r["issues"]), "SCOPE issues": names(got),
-                              "Issues agree": "yes" if set(r["issues"]) == got else "partly"})
+                              "Issues agree": "yes" if set(r["issues"]) == got else "partly",
+                              "Safety alert": "yes" if rec.get("alerts") else ""})
             df = pd.DataFrame(table)
             n = len(df)
             high = df[df["CRA risk"] == "high"]

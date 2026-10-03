@@ -72,7 +72,7 @@ class TestLLM(unittest.TestCase):
     def test_model_fallback_and_errors(self):
         from scope.engine import LLMParser
 
-        empty = {"visit": {}, "findings": [], "actions": [], "summary": ""}
+        empty = {"visit": {}, "findings": [], "actions": [], "summary": "Nothing to report."}
         client = FakeClient([ModelNotFound("gone"), fake_response(empty)], models=("gemini-9-flash", "gemini-8-flash"))
         rec = LLMParser(client).analyze(NOTE)
         self.assertEqual(rec["risk"]["level"], "low")
@@ -83,7 +83,7 @@ class TestLLM(unittest.TestCase):
     def test_busy_retry_then_next_model(self):
         from scope.engine import LLMParser
 
-        empty = {"visit": {}, "findings": [], "actions": [], "summary": ""}
+        empty = {"visit": {}, "findings": [], "actions": [], "summary": "Nothing to report."}
         # first model busy 3 times (1 try + 2 retries), second model answers
         client = FakeClient([ModelBusy("HTTP 503")] * 3 + [fake_response(empty)],
                             models=("gemini-9-flash", "gemini-8-flash"))
@@ -129,9 +129,9 @@ class TestLLM(unittest.TestCase):
 
         note = ("Monitor: Hannah Price, RN\nVisit Type: Interim Monitoring Visit (IMV)\nDate: October 14, 2025\n"
                 "Site 231: 5 screened, 2 randomized. All consents verified.")
-        answer = {"visit": {"visit_type": "Interim Monitoring Visit (IMV) - wait, rule: drop the brackets",
+        answer = {"visit": {"visit_type": "Interim Monitoring Visit (IMV) - from the header",
                             "visit_date": None, "screened": "5", "enrolled": "2"},
-                  "findings": [], "actions": [], "summary": ""}
+                  "findings": [], "actions": [], "summary": "All consents verified."}
         rec = LLMParser(FakeClient([fake_response(answer)])).analyze(note)
         self.assertEqual(rec["visit"]["visit_type"]["code"], "IMV")  # clean piece of a messy value
         self.assertEqual(rec["visit"]["visit_date"]["iso"], "2025-10-14")  # from the labelled header line
@@ -146,6 +146,58 @@ class TestLLM(unittest.TestCase):
         for r in load_handwritten() + load_realistic():
             first = " ".join(r["text"].split())[:80]
             self.assertNotIn(first, " ".join(SYSTEM.split()), r["id"])
+
+    def test_garbled_answer_is_retried_never_scored(self):
+        from scope.data.handwritten import load_handwritten
+        from scope.engine import UNREADABLE, LLMParser
+
+        note = next(r["text"] for r in load_handwritten() if r["id"] == "hw-04")  # the missed-SAE note
+        # what gemini-3.6-flash actually returned in the live app
+        garbled = {"visit": {"visit_type": "IMV\u6b63\u9762 Monitoring Visit (IMV) or IMV? Note says 'IMV', so IMV. "
+                                           "Wait, let's check: 'IMV'"},
+                   "findings": [], "actions": [], "summary": ""}
+        good = {"visit": {"visit_type": "IMV"}, "summary": "SAE never reported.", "actions": [],
+                "findings": [{"issue": "SAE_REPORTING", "status": "active", "severity": "critical",
+                              "evidence": "never made it into EDC as an SAE", "explanation": "unreported SAE"}]}
+        client = FakeClient([fake_response(garbled), fake_response(garbled), fake_response(good)])
+        rec = LLMParser(client).analyze(note)
+        self.assertEqual(rec["risk"]["level"], "high")
+        self.assertEqual(len([c for c in client.calls if c[0] == "POST"]), 3)
+        empty = {"visit": {}, "findings": [], "actions": [], "summary": ""}
+        with self.assertRaises(LLMError) as ctx:
+            LLMParser(FakeClient([fake_response(garbled), fake_response(empty), fake_response(garbled)])).analyze(note)
+        self.assertEqual(str(ctx.exception), UNREADABLE)
+
+    def test_safety_tripwire(self):
+        from scope.data.handwritten import load_handwritten
+        from scope.engine import LLMParser
+
+        note = next(r["text"] for r in load_handwritten() if r["id"] == "hw-04")
+        missed = {"visit": {}, "actions": [], "summary": "PI has not signed labs.",
+                  "findings": [{"issue": "PI_OVERSIGHT", "status": "active", "severity": "major",
+                                "evidence": "He has not signed any lab reports since November either.",
+                                "explanation": "unsigned labs"}]}
+        rec = LLMParser(FakeClient([fake_response(missed)])).analyze(note)
+        self.assertEqual(len(rec["alerts"]), 1)
+        self.assertIn("serious adverse event", rec["alerts"][0])
+        self.assertTrue(rec["review"]["needed"])
+        # a note that only says there were no SAEs, read correctly, raises no alert
+        fine = {"visit": {}, "actions": [], "summary": "Nothing open.",
+                "findings": [{"issue": "TEMP_EXCURSION", "status": "no_issue", "severity": "minor",
+                              "evidence": "No temperature excursions were noted on the digital data logger.",
+                              "explanation": ""},
+                             {"issue": "SAE_REPORTING", "status": "active", "severity": "critical",
+                              "evidence": "violating the mandatory 24-hour protocol reporting window",
+                              "explanation": "late"}]}
+        self.assertEqual(LLMParser(FakeClient([fake_response(fine)])).analyze(NOTE)["alerts"], [])
+
+    def test_no_low_temperature_sent(self):
+        client = FakeClient([fake_response("ok")])
+        sent = []
+        original = client._request
+        client._request = lambda m, p, b=None: (sent.append(b), original(m, p, b))[1]
+        client.generate("s", "p")
+        self.assertNotIn("temperature", sent[-1]["generationConfig"])
 
     def test_letter(self):
         from scope.predict import RuleBasedParser

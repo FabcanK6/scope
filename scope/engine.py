@@ -16,7 +16,7 @@ import json
 import re
 import time
 
-from scope.llm import RUBRIC_TEXT, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
+from scope.llm import RUBRIC_TEXT, _norm, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
 from scope.record import build_record, normalize_date
 from scope.rules import RuleParser
 from scope.schema import ISSUE_BY_CODE, ISSUE_CODES
@@ -41,6 +41,7 @@ EXTRACT_SCHEMA = {
         "summary": {"type": "STRING"},
     },
     "required": ["visit", "findings", "actions", "summary"],
+    "propertyOrdering": ["findings", "actions", "summary", "visit"],
 }
 
 ISSUE_LIST = "\n".join(f"- {c}: {ISSUE_BY_CODE[c].display} ({ISSUE_BY_CODE[c].group})" for c in ISSUE_CODES)
@@ -129,6 +130,10 @@ ANSWER_3 = {
                "deviation; nothing else is open.",
 }
 
+def _dump(answer: dict) -> str:
+    return json.dumps({k: answer[k] for k in EXTRACT_SCHEMA["propertyOrdering"]})
+
+
 SYSTEM = f"""You read clinical trial site monitoring visit notes for a clinical research associate (CRA) and turn
 each note into structured data.
 
@@ -154,15 +159,17 @@ Rules:
 
 Example note:
 \"\"\"{EXAMPLE_1}\"\"\"
-Answer: {json.dumps(ANSWER_1)}
+Answer: {_dump(ANSWER_1)}
 
 Example note:
 \"\"\"{EXAMPLE_2}\"\"\"
-Answer: {json.dumps(ANSWER_2)}
+Answer: {_dump(ANSWER_2)}
 
 Example note:
 \"\"\"{EXAMPLE_3}\"\"\"
-Answer: {json.dumps(ANSWER_3)}"""
+Answer: {_dump(ANSWER_3)}"""
+
+ENGINE_REV = "5.3"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -223,6 +230,56 @@ def _short(value, n: int = 60) -> str:
     return value if len(value) <= n else value[: n - 1] + "…"
 
 
+UNREADABLE = ("Gemini did not return a usable reading of this note (empty or garbled answer), so SCOPE has not "
+              "scored it. Please try again.")
+_RAMBLE = re.compile(r"\?|\bwait\b|let'?s (?:check|see)|\bhmm+\b|\bactually\b|\bI think\b", re.I)
+_FOREIGN = re.compile(r"[\u3000-\u9fff\uac00-\ud7af\u0400-\u04ff]")
+
+
+def output_problem(data, text: str) -> str | None:
+    """Why an LLM answer can't be trusted as a whole (None when it looks sound)."""
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        return "no findings list"
+    if not data["findings"] and not str(data.get("summary") or "").strip():
+        return "empty answer"
+    values = [v for v in (data.get("visit") or {}).values() if isinstance(v, str)]
+    values += [str(f.get("evidence", "")) for f in data["findings"] if isinstance(f, dict)]
+    for v in values:
+        if len(v) > 600 or (_FOREIGN.search(v) and not _FOREIGN.search(text)):
+            return "garbled value"
+    for v in (data.get("visit") or {}).values():
+        if isinstance(v, str) and (len(v) > 120 or (_RAMBLE.search(v) and _norm(v) not in _norm(text))):
+            return "reasoning inside a value"
+    return None
+
+
+# Plain-code safety net. If the note uses one of these words and the LLM returned no finding at all (of any
+# status) for the matching topic, SCOPE raises an alert instead of quietly trusting the reading.
+TRIPWIRES = [
+    ({"SAE_REPORTING"}, "a possible serious adverse event",
+     r"\bSAEs?\b|serious adverse|hospitali[sz]|\badmitted\b|\badmission\b|\bE[DR] visit|emergency (?:room|department)"
+     r"|life[- ]threatening|\bdied\b|\bdeath\b"),
+    ({"CONSENT"}, "a possible consent problem",
+     r"before (?:\w+ ){0,3}(?:signed|signing) (?:the )?(?:ICF|consent)|without (?:a )?(?:signed )?(?:ICF|consent)"
+     r"|verbal(?:ly)? consent|consented after|consent (?:was )?signed after"),
+    ({"PROTOCOL_DEVIATION", "IP_ACCOUNTABILITY"}, "a possible dosing error",
+     r"double dos|wrong dose|wrong kit|overdos|dosing error|dosed (?:in error|despite)"),
+    ({"REG_DOCS", "PROTOCOL_DEVIATION", "CONSENT"}, "a possible IRB approval lapse",
+     r"IRB[^.\n]{0,60}\b(?:expired|lapsed)|(?:expired|lapsed)[^.\n]{0,30}IRB"),
+]
+
+
+def safety_alerts(text: str, findings: list[dict]) -> list[str]:
+    covered = {f["issue"] for f in findings if f.get("verified")}
+    alerts = []
+    for codes, what, pattern in TRIPWIRES:
+        m = re.search(pattern, text, re.I)
+        if m and not covered & codes:
+            alerts.append(f"The note mentions {what} (\"{m.group(0)}\") but SCOPE returned no finding about it. "
+                          "Read this note yourself before relying on the risk level.")
+    return alerts
+
+
 class LLMParser:
     name = "llm"
 
@@ -233,8 +290,17 @@ class LLMParser:
     def extract(self, text: str) -> dict:
         return self.client.generate_json(SYSTEM, f"Note:\n\"\"\"\n{text}\n\"\"\"\nAnswer:", EXTRACT_SCHEMA)
 
+    attempts = 3  # a garbled or empty answer is asked again, never scored
+
+    def read(self, text: str) -> dict:
+        for _ in range(self.attempts):
+            data = self.extract(text)
+            if output_problem(data, text) is None:
+                return data
+        raise LLMError(UNREADABLE)
+
     def predict(self, text: str) -> dict:
-        data = self.extract(text)
+        data = self.read(text)
         tokens = tokenize(text)
         char_spans: list[tuple[str, int, int]] = []
         problems: list[str] = []
@@ -271,6 +337,7 @@ class LLMParser:
         if unverified:
             problems.append(f"{len(unverified)} finding(s) quote text that is not in the note and were ignored")
         scored = score_findings(findings)
+        alerts = safety_alerts(text, findings)
 
         # action items: the action text must be in the note; owner and due are looked for in the same sentence
         bounds = sentences(text)
@@ -304,7 +371,8 @@ class LLMParser:
             "severities": scored["active"], "points": scored["points"], "findings": findings,
             "action_items": action_items, "actions": [{k: a[k] for k in ("action", "owner", "due")}
                                                       for a in action_items],
-            "summary": data.get("summary", ""), "review_reasons": problems, "backend": self.name,
+            "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
+            "backend": self.name,
             "model": self.client.model, "llm_output": data,
         }
 

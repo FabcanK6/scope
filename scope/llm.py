@@ -121,11 +121,13 @@ class GeminiClient:
         return list(dict.fromkeys(m for m in order if m))[: self.max_models]
 
     # -- generation -------------------------------------------------------
-    def generate(self, system: str, prompt: str, schema: dict | None = None, temperature: float = 0.1) -> str:
+    def generate(self, system: str, prompt: str, schema: dict | None = None) -> str:
+        # No temperature: Google advises keeping Gemini 3 models at their default, because a low temperature can
+        # cause looping and degraded answers (and newer Flash models ignore it).
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {"temperature": temperature},
+            "generationConfig": {},
         }
         if schema is not None:
             body["generationConfig"].update(responseMimeType="application/json", responseSchema=schema)
@@ -242,8 +244,7 @@ def draft_followup(client: GeminiClient, record: dict) -> str:
                      for f in record.get("findings", []) if f.get("verified") and f["status"] != "no_issue"],
         "action_items": [{k: a[k] for k in ("action", "owner", "due")} for a in record["actions"]],
     }
-    return client.generate(LETTER_SYSTEM, "Facts from the visit (JSON):\n" + json.dumps(facts, indent=2),
-                           temperature=0.3).strip()
+    return client.generate(LETTER_SYSTEM, "Facts from the visit (JSON):\n" + json.dumps(facts, indent=2)).strip()
 
 
 def get_api_key(secrets=None) -> str | None:

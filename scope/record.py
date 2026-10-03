@@ -162,6 +162,7 @@ def build_record(text: str, pred: dict) -> dict:
         "backend": pred.get("backend"),
         "model": pred.get("model"),
         "llm_output": pred.get("llm_output"),
+        "alerts": pred.get("alerts", []),
     }
 
 
@@ -227,4 +228,5 @@ def to_row(rec: dict) -> dict:
         "issues": "; ".join(i["code"] for i in rec["issues"]), "n_issues": len(rec["issues"]),
         "n_actions": len(rec["actions"]), "screened": v["screened"], "enrolled": v["enrolled"],
         "needs_review": rec.get("review", {}).get("needed", False),
+        "safety_alert": bool(rec.get("alerts")),
     }
