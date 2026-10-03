@@ -211,10 +211,12 @@ RUBRIC_TEXT = """Severity rubric (from an experienced clinical research associat
   ineligible subject dosed; dosing errors (wrong dose, dosed despite a hold criterion); expired investigational
   product, or product used after a temperature excursion before Sponsor assessment; enrolling after IRB approval
   lapsed; untrained staff running study visits; site refuses access to source documents.
-- major: outdated ICF version in use or re-consent overdue; important protocol deviations; kits unaccounted for or
-  wrong kit dispensed; temperature excursion not reported or logs not kept; staff not on the delegation log; PI not
-  signing labs or casebooks; large data entry or query backlog (60+ days); essential documents missing (1572,
-  amendment approval, licenses); enrollment far behind target.
+- major: outdated ICF version in use or re-consent overdue (still major and "active" when the subject was
+  re-consented during the visit, because the deviation happened); important protocol deviations; kits unaccounted for
+  or wrong kit dispensed; temperature excursion not reported or logs not kept; staff not on the delegation log; PI not
+  signing labs or casebooks; large data entry or query backlog (60+ days); essential documents or approvals missing
+  (1572, amendment approval, licenses, or a pending IRB approval that blocks screening); enrollment far behind
+  target.
 - minor: single out-of-window visit; a concomitant medication not yet entered; a few pages or queries open; missing
   time of signature on an ICF; one unsigned CV; brief excursion with no product impact; supply shortages.
 Status: "active" = a problem that still exists after the visit. "resolved_on_site" = it was corrected and verified

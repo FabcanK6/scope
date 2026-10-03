@@ -8,6 +8,9 @@
 # corrected during the visit. Same format and risk rubric as handwritten.txt.
 # Action items are only labelled where the note states an open one; this set mainly
 # measures risk, issues and metadata.
+# Relabelled by the CRA after review (2026-10-03): real-04 low -> medium (a pending IRB approval that blocks
+# screening is a major essential-document gap) and real-06 low -> medium (consent on an outdated ICF version is
+# a major deviation even when the subject is re-consented during the visit).
 
 === real-01
 risk: low
@@ -44,7 +47,7 @@ Arrived at the site at 09:00 AM. Met with the new back-up Study Coordinator, May
 I also checked the laboratory kit inventory. The site is currently running low on central lab ambient shipping boxes (only 2 remaining). I assisted the SC in placing an expedited reorder through the laboratory portal to avoid missing the upcoming Week 8 visits for the active cohort.
 
 === real-04
-risk: low
+risk: medium
 issues: REG_DOCS
 ---
 Monitor: [[Daniel Park|MONITOR]]
@@ -69,7 +72,7 @@ The subject was hospitalized for acute cholecystitis on August 30, 2026, but the
 I retrained both the PI and the primary SC on SAE definition and reporting timelines. The site has implemented a Corrective and Preventive Action (CAPA) plan, which includes adding a "Call the Study Team Immediately if Hospitalized" sticker to all subject diary cards. I verified that the eCRF SAE form matches the hospital discharge summary regarding dates, severity, and the PI's causality assessment (determined to be "Not Related" to the study drug).
 
 === real-06
-risk: low
+risk: medium
 issues: PROTOCOL_DEVIATION
 ---
 Monitor: [[Lena Fischer|MONITOR]], CRA
