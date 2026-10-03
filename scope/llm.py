@@ -42,6 +42,24 @@ class ModelNotFound(LLMError):
     """This model can't be used with this key; try another one."""
 
 
+class QuotaExceeded(LLMError):
+    """This model's free quota is used up (per minute or per day); other models have their own quota."""
+
+    def __init__(self, detail: str = ""):
+        super().__init__(detail)
+        self.per_day = bool(re.search(r"PerDay", detail))
+        m = re.search(r'"retryDelay":\s*"(\d+)', detail)
+        self.retry_seconds = int(m.group(1)) if m else None
+
+
+def quota_message(e: QuotaExceeded) -> str:
+    if e.per_day:
+        return ("Today's free Gemini quota is used up for every model SCOPE can use. It resets at midnight Pacific "
+                "time. Notes that were already read today still open from the cache.")
+    wait = f"about {e.retry_seconds} seconds" if e.retry_seconds else "a minute"
+    return f"Gemini's free per-minute limit was reached. Wait {wait} and try again."
+
+
 class ModelBusy(LLMError):
     """Temporary overload (HTTP 500/502/503/504 or a timeout); retry, then try another model."""
 
@@ -51,7 +69,7 @@ class ModelBusy(LLMError):
 # ---------------------------------------------------------------------------
 class GeminiClient:
     retry_delays = (2.0, 5.0)  # waits before the 2nd and 3rd attempt on a busy model
-    max_models = 4  # how many models to try before giving up
+    max_models = 6  # how many models to try before giving up
 
     def __init__(self, api_key: str, model: str | None = None, timeout: int = 60):
         if not api_key:
@@ -74,11 +92,11 @@ class GeminiClient:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode())
         except urllib.error.HTTPError as e:
-            detail = e.read().decode(errors="replace")[:300]
+            detail = e.read().decode(errors="replace")[:3000]
             if e.code == 429 and re.search(r"limit:\s*0\b", detail):
                 raise ModelNotFound(f"model not available on this tier: {detail}") from e  # try another model
             if e.code == 429:
-                raise LLMError("The free Gemini quota is used up for now. Try again later.") from e
+                raise QuotaExceeded(detail) from e  # try another model: free quotas are per model
             if e.code in (401, 403):
                 raise LLMError("The Gemini API key was rejected. Check the key in the app settings.") from e
             if e.code == 404:
@@ -135,8 +153,9 @@ class GeminiClient:
         for model in self.candidates():
             try:
                 data = self._call_with_retry(f"models/{model}:generateContent", body)
-            except (ModelNotFound, ModelBusy) as e:
-                last = e
+            except (ModelNotFound, ModelBusy, QuotaExceeded) as e:
+                if not isinstance(last, QuotaExceeded):  # report the quota problem if any model hit it
+                    last = e
                 continue
             self.model = model  # remember the model that worked
             try:
@@ -144,6 +163,8 @@ class GeminiClient:
             except (KeyError, IndexError) as e:
                 reason = data.get("promptFeedback", {}).get("blockReason") or "empty response"
                 raise LLMError(f"Gemini returned no text ({reason}).") from e
+        if isinstance(last, QuotaExceeded):
+            raise LLMError(quota_message(last))
         if isinstance(last, ModelBusy):
             raise LLMError(BUSY_MESSAGE)
         raise LLMError(f"No usable Gemini model found ({last}).")

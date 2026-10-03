@@ -2,7 +2,16 @@
 import json
 import unittest
 
-from scope.llm import BUSY_MESSAGE, GeminiClient, LLMError, ModelBusy, ModelNotFound, draft_followup, verify_quote
+from scope.llm import (
+    BUSY_MESSAGE,
+    GeminiClient,
+    LLMError,
+    ModelBusy,
+    ModelNotFound,
+    QuotaExceeded,
+    draft_followup,
+    verify_quote,
+)
 
 NOTE = ("Visit Type: Directed/For-Cause Monitoring Visit\nDate: September 18, 2026\n"
         "The subject was hospitalized on August 30, 2026, but the site did not notify the Sponsor until "
@@ -198,6 +207,21 @@ class TestLLM(unittest.TestCase):
         client._request = lambda m, p, b=None: (sent.append(b), original(m, p, b))[1]
         client.generate("s", "p")
         self.assertNotIn("temperature", sent[-1]["generationConfig"])
+
+    def test_quota_falls_back_to_next_model(self):
+        day = '{"error": {"details": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}}'
+        minute = '{"error": {"details": [{"quotaId": "GenerateRequestsPerMinute"}, {"retryDelay": "27s"}]}}'
+        client = FakeClient([QuotaExceeded(day), fake_response("ok")], models=("gemini-9-flash", "gemini-8-flash"))
+        self.assertEqual(client.generate("s", "p"), "ok")
+        self.assertEqual(client.model, "gemini-8-flash")
+        client = FakeClient([QuotaExceeded(day)] * 6, models=("gemini-9-flash", "gemini-8-flash"))
+        with self.assertRaises(LLMError) as ctx:
+            client.generate("s", "p")
+        self.assertIn("midnight Pacific", str(ctx.exception))
+        client = FakeClient([QuotaExceeded(minute)] * 6, models=("gemini-9-flash",))
+        with self.assertRaises(LLMError) as ctx:
+            client.generate("s", "p")
+        self.assertIn("27 seconds", str(ctx.exception))
 
     def test_letter(self):
         from scope.predict import RuleBasedParser
