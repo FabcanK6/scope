@@ -28,7 +28,7 @@ from scope import ownmodel as OM  # noqa: E402
 from scope import protocol as PR  # noqa: E402
 from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
-from scope.data.handwritten import load_handwritten, load_realistic, load_stress  # noqa: E402
+from scope.data.handwritten import load_handwritten, load_practice, load_realistic, load_stress  # noqa: E402
 from scope.engine import ENGINE_REV, SYSTEM, LLMParser, Unreadable  # noqa: E402
 from scope.llm import LLMError, draft_followup, get_api_key, verify_quote  # noqa: E402
 from scope.record import audit_summary, to_row  # noqa: E402
@@ -113,6 +113,32 @@ def own_model() -> OM.OwnModel | None:
         return _own_model(L.digest(lib) if lib else "-", bar)
     except Exception:  # never let the side model stop a reading
         return None
+
+
+@st.cache_data(show_spinner=False)
+def practice_notes() -> list[dict]:
+    return [{k: r[k] for k in ("id", "text", "risk", "label", "tests") if k in r} for r in load_practice()]
+
+
+VOTER_KEY = "scope.voter.v1"
+
+
+def voter_id() -> str:
+    """An anonymous id for this browser (a random value kept in its local storage), stored only as a hash."""
+    if st.session_state.get("voter"):
+        return st.session_state["voter"]
+    raw = None
+    if _browser_js is not None:
+        raw = _browser_js(js_expressions=(
+            f"localStorage.getItem('{VOTER_KEY}') || (localStorage.setItem('{VOTER_KEY}', "
+            f"(self.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Math.random()).slice(2) + Date.now()), "
+            f"localStorage.getItem('{VOTER_KEY}'))"), key="scope_voter")
+    if raw:
+        st.session_state["voter"] = L.voter_hash(str(raw))
+        return st.session_state["voter"]
+    import uuid
+
+    return st.session_state.setdefault("voter_tmp", L.voter_hash(uuid.uuid4().hex))  # until the browser answers
 
 
 def share_case(case: dict) -> bool:
@@ -401,12 +427,12 @@ def feedback(note: str, rec: dict) -> None:
         done = key in st.session_state.setdefault("shared", set())
         c1, c2 = st.columns([1, 2.4])
         if c1.button("SCOPE got this right", key=f"ok_{key}", disabled=done):
-            if share_case(L.make_case("confirmation", note, rec, current_profile())):
+            if share_case(L.make_case("confirmation", note, rec, current_profile(), voter=voter_id())):
                 st.session_state["shared"].add(key)
                 done = True
-        c2.caption("Shared for review, so SCOPE learns from it. Thank you!" if done else
-                   "One click teaches SCOPE. It shares this note and SCOPE's reading for review: fictional or "
-                   "de-identified notes only.")
+        c2.caption("Shared. Once two more people agree, SCOPE learns from it. Thank you!" if done else
+                   "One click teaches SCOPE. It shares this note and SCOPE's reading with other SCOPE users for "
+                   "review: fictional or de-identified notes only.")
     correction_form(note, rec, store)
 
 
@@ -418,8 +444,8 @@ def correction_form(note: str, rec: dict, store=None) -> None:
     found = [f for f in rec.get("findings", []) if f.get("verified")]
     with st.expander("Disagree with SCOPE? Correct it"):
         st.caption("Your correction is saved to this study as a proposal. Once the study lead approves it, SCOPE "
-                   "uses it whenever it reads a similar note." + (" Share it too, and once reviewed it helps "
-                                                                  "every SCOPE user." if store else ""))
+                   "uses it whenever it reads a similar note." + (" Share it too, and once two more people agree, "
+                                                                  "it helps every SCOPE user." if store else ""))
         with st.form(f"correct_{hashlib.sha256(note.encode()).hexdigest()[:8]}", clear_on_submit=True):
             options = [f"{f['display']} ({f['status'].replace('_', ' ')}"
                        f"{', ' + f.get('final_severity', f['severity']) if f['status'] == 'active' else ''})"
@@ -439,7 +465,7 @@ def correction_form(note: str, rec: dict, store=None) -> None:
             cra_risk = st.selectbox("What should this visit's risk be? (optional)", ["", "low", "medium", "high"])
             who = st.text_input("Your name or initials (optional)")
             share = store is not None and st.checkbox(
-                "Share it so SCOPE learns for everyone (fictional or de-identified notes only)")
+                "Share it with other SCOPE users so SCOPE learns for everyone (fictional or de-identified notes only)")
             if st.form_submit_button("Save correction"):
                 if not quote.strip() or not verify_quote(quote, note):
                     st.error("The quote must be words copied from the note.")
@@ -453,12 +479,13 @@ def correction_form(note: str, rec: dict, store=None) -> None:
                                  reason=reason, scope_said=scope_said, cra_risk=cra_risk or None, who=who)
                 msg = "Correction saved for this study as a proposal (approve it in the Study setup tab)."
                 if share:
-                    case = L.make_case("correction", note, rec, prof, by=who, correction={
+                    case = L.make_case("correction", note, rec, prof, by=who, voter=voter_id(), correction={
                         "issue": code, "display": topic, "status": stat,
                         "severity": severity if stat == "active" else None, "quote": quote.strip(),
                         "reason": reason.strip(), "risk": cra_risk or None})
                     if share_case(case):
-                        msg += " Shared for review: once approved, SCOPE uses it for everyone."
+                        msg += (" Shared: once two more people agree in **Help SCOPE learn**, SCOPE uses it for "
+                                "everyone.")
                 st.success(msg)
 
 
@@ -473,26 +500,129 @@ def own_model_status() -> None:
         st.caption("Not enough expert-labelled notes yet to measure it.")
         return
     c1, c2, c3 = st.columns(3)
-    c1.metric("Agrees with experts", f"{r['accuracy']:.0%}", help="Risk level, on expert-labelled notes it was not "
-              "trained on (5-fold check, repeated 3 times).")
+    c1.metric("Agrees with people", f"{r['accuracy']:.0%}", help="Risk level, on notes labelled by experts or "
+              "agreed by the community that it was not trained on (5-fold check, repeated 3 times).")
     c2.metric("High-risk visits caught", f"{r['high_recall']:.0%}" if r["high_recall"] is not None else "-")
-    c3.metric("Trained on", f"{r['expert_notes'] + r['shared_cases']} notes",
-              help=f"{r['expert_notes']} expert-labelled notes and {r['shared_cases']} approved shared cases")
+    c3.metric("Trained on", f"{r['expert_notes'] + r['community_notes'] + r['shared_cases']} notes",
+              help=f"{r['expert_notes']} expert-labelled notes, {r['community_notes']} practice notes the "
+                   f"community agreed on and {r['shared_cases']} approved shared cases")
     if om.active:
         st.success("Switched on: it gives a second opinion on every visit's risk level, and a rough estimate when the "
                    "AI model is unavailable.")
     else:
         st.info(f"Not switched on yet: it switches itself on at {r['bar']:.0%} agreement (and "
                 f"{r['high_recall_bar']:.0%} of high-risk visits caught). It retrains by itself every time a shared "
-                "case is approved, so each confirmed or corrected reading moves it closer.")
+                "case is approved or a practice note is agreed, so every rating moves it closer.")
+
+
+def practice_panel(lib: dict, store) -> None:
+    """Rate fictional practice notes: the community's labels, counted once enough people agree."""
+    st.subheader("Rate a practice visit")
+    st.caption("Fictional notes. Read the note and pick the risk you would give the visit. Ratings are anonymous; a "
+               f"label counts once {L.AGREE_MIN} people agree, then SCOPE learns from it.")
+    me = voter_id()
+    notes = practice_notes()
+    mine = {v["item"] for v in lib.get("votes", []) if v["voter"] == me}
+    skipped = st.session_state.setdefault("practice_skipped", set())
+    last = st.session_state.get("practice_last")
+    if last:
+        values = [v["value"] for v in L.votes_for(lib, f"note:{last['id']}")]
+        tally = " · ".join(f"{r} {values.count(r)}" for r in L.RISKS)
+        agreed = L.note_consensus(values)
+        st.success(f"Thanks! You said **{last['value'].upper()}**. Ratings so far: {tally}"
+                   + (f" (agreed: **{agreed.upper()}**)." if agreed else ".")
+                   + f" SCOPE's suggested label was **{last['proposed'].upper()}**: {last['label']}")
+    todo = [n for n in notes if f"note:{n['id']}" not in mine and n["id"] not in skipped]
+    done = sum(f"note:{n['id']}" in mine for n in notes)
+    st.caption(f"You have rated {done} of {len(notes)} practice notes.")
+    if not todo:
+        st.info("You have rated every practice note. Thank you! New ones are added over time.")
+        return
+    note = todo[0]
+    with st.container(border=True):
+        st.text(note["text"])
+    with st.form(f"rate_{note['id']}", clear_on_submit=True):
+        risk = st.radio("What risk would you give this visit?", list(L.RISKS), index=None, horizontal=True)
+        why = st.text_input("Main reason (optional)")
+        c1, c2, _ = st.columns([1, 1, 3])
+        submit = c1.form_submit_button("Submit rating", type="primary")
+        skip = c2.form_submit_button("Skip")
+    if skip:
+        skipped.add(note["id"])
+        st.session_state.pop("practice_last", None)
+        st.rerun()
+    if submit:
+        if not risk:
+            st.warning("Pick low, medium or high first.")
+            return
+        try:
+            store.add_vote(L.make_vote(f"note:{note['id']}", me, risk, why))
+        except L.LearningError as e:
+            st.error(f"Not saved: {e}")
+            return
+        _load_library.clear()
+        st.session_state["practice_last"] = {"id": note["id"], "value": risk, "proposed": note["risk"],
+                                             "label": note.get("label", "")}
+        st.rerun()
+
+
+def community_review(lib: dict, store) -> None:
+    """Shared corrections and confirmations, reviewed by other SCOPE users: three agreeing makes them count."""
+    st.subheader("Review what others shared")
+    if st.session_state.get("review_note"):
+        st.success(st.session_state.pop("review_note"))
+    me = voter_id()
+    mine = {v["item"] for v in lib.get("votes", []) if v["voter"] == me}
+    queue = [c for c in lib["pending"] if c.get("voter") != me and f"case:{c['id']}" not in mine]
+    if not queue:
+        st.caption("Nothing waiting for you to review right now.")
+        return
+    st.caption(f"Does SCOPE have this right? A shared case goes live once {L.AGREE_MIN} people agree (the person who "
+               "shared it counts as one), and is dropped if as many disagree.")
+    topics = P.topic_map(current_profile())
+    for c in queue[:5]:
+        with st.container(border=True):
+            said = c.get("scope_said") or {}
+            active = [f"{topics.get(f['issue'], {}).get('display', f['issue'])} ({f['severity']})"
+                      for f in said.get("findings", []) if f.get("status") == "active"]
+            st.caption(f"SCOPE read this visit as {str(said.get('risk') or '-').upper()} risk"
+                       + (f": {', '.join(active)}" if active else ", no active problems"))
+            with st.expander("The note"):
+                st.text(c["note"])
+            if c["kind"] == "correction":
+                x = c["correction"]
+                st.markdown("**Someone says:** " + L.ruling_line(c, topics)[2:]
+                            + (f" Visit risk should be **{x['risk'].upper()}**." if x.get("risk") else ""))
+                question = "Do you agree with this correction?"
+            else:
+                st.markdown("**Someone says SCOPE's reading is right.**")
+                question = "Do you agree SCOPE read it right?"
+            agree, disagree = L.case_tally(c, lib)
+            st.caption(f"{question} So far {agree} agree, {disagree} disagree.")
+            b1, b2, _ = st.columns([1, 1, 3])
+            for value, btn in (("agree", b1.button("Agree", key=f"ag_{c['id']}")),
+                               ("disagree", b2.button("Disagree", key=f"dis_{c['id']}"))):
+                if btn:
+                    try:
+                        store.add_vote(L.make_vote(f"case:{c['id']}", me, value))
+                        fresh = store.load()
+                        decided = L.apply_consensus(store, fresh)
+                    except L.LearningError as e:
+                        st.error(f"Not saved: {e}")
+                        break
+                    _load_library.clear()
+                    if any(d["id"] == c["id"] and d["status"] == "approved" for d in decided):
+                        st.session_state["review_note"] = "Agreed by the community: SCOPE now uses it."
+                    else:
+                        st.session_state["review_note"] = "Thanks, your vote is in."
+                    st.rerun()
 
 
 def learned_tab() -> None:
-    """What SCOPE has learned from its users, and the review queue for curators."""
-    st.markdown("**SCOPE learns from the people who use it.** When someone corrects a reading, or confirms it was "
-                "right, and shares it, a reviewer checks it. Once approved, SCOPE uses that ruling on similar notes "
-                "for everyone, straight away. Nothing changes SCOPE's judgement without a person approving it, and "
-                "every ruling keeps who, when and why.")
+    """Help SCOPE learn: rate practice notes, review what others shared, and see what SCOPE has learned."""
+    st.markdown("**SCOPE learns from the people who use it.** Rate a practice visit, or agree or disagree with what "
+                "others shared. When enough people agree, SCOPE uses it straight away, for everyone. Every ruling "
+                "keeps who agreed, when and why.")
     store = learning_store()
     if store is None:
         st.info("Shared learning is not switched on for this copy of SCOPE. Corrections still improve each study "
@@ -503,23 +633,31 @@ def learned_tab() -> None:
         st.warning("The shared library can't be reached right now, so SCOPE is reading notes without it. "
                    + st.session_state.get("learning_error", ""))
         return
+    practice_panel(lib, store)
+    st.divider()
+    community_review(lib, store)
+    st.divider()
+    st.subheader("What SCOPE has learned")
     approved = lib["approved"]
     rulings_ = [c for c in approved if c["kind"] == "correction"]
-    m1, m2, m3 = st.columns(3)
+    agreed = L.community_rows(lib, practice_notes())
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Rulings in use", len(rulings_))
     m2.metric("Confirmed readings", len(approved) - len(rulings_))
-    m3.metric("Waiting for review", len(lib["pending"]))
+    m3.metric("Practice notes agreed", len(agreed))
+    m4.metric("Waiting for review", len(lib["pending"]))
     if rulings_:
         st.dataframe(pd.DataFrame([{
-            "Approved": c.get("decided") or "", "When a note says": c["correction"]["quote"],
+            "Since": c.get("decided") or "", "When a note says": c["correction"]["quote"],
             "Ruling": L.ruling_line(c, P.topic_map(current_profile())).split(": ", 1)[-1],
-            "Applies to": "All studies" if c.get("applies_to") == L.ALL_STUDIES else c.get("applies_to")}
+            "Applies to": "All studies" if c.get("applies_to") == L.ALL_STUDIES else c.get("applies_to"),
+            "Agreed by": c.get("curator_note") or "curator"}
             for c in reversed(rulings_)]), hide_index=True, width="stretch")
     else:
         st.caption("No rulings yet. Correct a reading and tick **Share it** to teach SCOPE the first one.")
     own_model_status()
 
-    with st.expander("Review shared cases (curators)"):
+    with st.expander("Curator tools"):
         expected = _setting("SCOPE_CURATOR_KEY")
         if not expected:
             st.caption("Add SCOPE_CURATOR_KEY to the app's secrets to review shared cases here.")
@@ -533,6 +671,8 @@ def learned_tab() -> None:
         rows = L.training_rows(lib)
         st.download_button("Download training data (.jsonl)", "\n".join(json.dumps(r) for r in rows),
                            file_name="scope_training.jsonl", disabled=not rows)
+        st.caption("Curators can approve or reject a shared case without waiting for the community, and retire any "
+                   "ruling.")
         if not lib["pending"]:
             st.success("Nothing is waiting for review.")
         topics = P.topic_map(current_profile())
@@ -861,6 +1001,8 @@ def load_example_note() -> None:
 with st.sidebar:
     # 1. the study: protocol first, everything else is judged against it
     browser_sync()
+    if learning_store() is not None:
+        voter_id()  # ask the browser for its anonymous id early, so it is ready when someone rates or reviews
     if "pending_study" in st.session_state:  # a study was just created or saved: select it
         st.session_state["study_choice"] = st.session_state.pop("pending_study")
     if st.session_state.get("study_choice", GENERAL_STUDY) not in study_choices():  # e.g. browser data cleared
@@ -949,7 +1091,7 @@ with st.sidebar:
 
 parser = get_parser()
 tab_one, tab_batch, tab_check, tab_prof, tab_learn = st.tabs(
-    ["Analyze a note", "Portfolio view", "Accuracy check", "Study setup", "What SCOPE learned"])
+    ["Analyze a note", "Portfolio view", "Accuracy check", "Study setup", "Help SCOPE learn"])
 
 with tab_one:
     note = st.text_area("Site-visit note", key="note", height=230,
@@ -1159,6 +1301,10 @@ with tab_check:
 
     sets = {f"Demo studies ({len(DM.labelled_rows())} notes, each under its own protocol)": DM.labelled_rows(),
             **labelled_sets()}
+    lib_now = library()
+    agreed = L.community_rows(lib_now, practice_notes()) if lib_now else []
+    if agreed:
+        sets[f"Practice notes rated by the community ({len(agreed)} agreed)"] = agreed
     corrected = [c for c in current_profile()["corrections"] if c.get("cra_risk") and c.get("note")]
     if corrected:
         unique = list({c["note"]: c for c in corrected}.values())

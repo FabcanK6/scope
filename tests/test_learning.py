@@ -171,6 +171,9 @@ class TestHFStore(unittest.TestCase):
         self.assertEqual(list(self.hub.files), [f"approved/{case['id']}.json"])
         approved = store.load()["approved"][0]
         self.assertEqual(approved["applies_to"], "Demo study")
+        store.add_vote(L.make_vote(f"case:{case['id']}", L.voter_hash("x"), "agree"))
+        self.assertIn(f"votes/case-{case['id']}/{L.voter_hash('x')}.json", self.hub.files)
+        self.assertEqual(len(store.load()["votes"]), 1)
         self.assertEqual(json.loads(self.hub.files[f"approved/{case['id']}.json"])["status"], "approved")
 
     def test_needs_settings_and_reports_errors(self):
@@ -183,6 +186,71 @@ class TestHFStore(unittest.TestCase):
         self.hub.snapshot_download = broken
         with self.assertRaisesRegex(L.LearningError, "Could not read"):
             L.HFStore("someone/scope-learning", "hf_test").load()
+
+
+
+class TestCommunity(unittest.TestCase):
+    def test_note_consensus(self):
+        self.assertEqual(L.note_consensus(["high"] * 3), "high")
+        self.assertIsNone(L.note_consensus(["high"] * 2))  # not enough people yet
+        self.assertEqual(L.note_consensus(["high", "high", "high", "medium"]), "high")  # 75%
+        self.assertIsNone(L.note_consensus(["high", "high", "high", "low"]))  # someone two levels away
+        self.assertIsNone(L.note_consensus(["medium"] * 3 + ["high"] * 2))  # only 60%
+
+    def test_shared_case_goes_live_when_three_agree(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = L.LocalStore(d)
+            alice, bob, cara, dan = (L.voter_hash(x) for x in ("a", "b", "c", "d"))
+            case = L.make_case("correction", NOTE, reading(), P.default_profile(), correction(), voter=alice)
+            store.add(case)
+            store.add_vote(L.make_vote(f"case:{case['id']}", alice, "agree"))  # the sharer counts once only
+            store.add_vote(L.make_vote(f"case:{case['id']}", bob, "agree"))
+            self.assertEqual(L.case_tally(case, store.load()), (2, 0))
+            self.assertEqual(L.apply_consensus(store, store.load()), [])
+            store.add_vote(L.make_vote(f"case:{case['id']}", bob, "disagree"))  # changes mind: replaces
+            store.add_vote(L.make_vote(f"case:{case['id']}", bob, "agree"))
+            store.add_vote(L.make_vote(f"case:{case['id']}", cara, "agree"))
+            decided = L.apply_consensus(store, store.load())
+            self.assertEqual([c["status"] for c in decided], ["approved"])
+            lib = store.load()
+            self.assertEqual(lib["approved"][0]["applies_to"], L.ALL_STUDIES)
+            self.assertIn("3 agreed", lib["approved"][0]["curator_note"])
+            self.assertEqual(len(lib["votes"]), 3)  # alice, bob (once), cara
+            # dropped when three disagree
+            other = L.make_case("confirmation", UNRELATED, reading(UNRELATED), P.default_profile(), voter=alice)
+            store.add(other)
+            for v in (bob, cara, dan):
+                store.add_vote(L.make_vote(f"case:{other['id']}", v, "disagree"))
+            self.assertEqual([c["status"] for c in L.apply_consensus(store, store.load())], ["rejected"])
+
+    def test_study_rulings_stay_with_their_study(self):
+        prof = {**P.default_profile(), "name": "Demo · Psoriasis · ZLV-301 (Phase III)"}
+        case = L.make_case("correction", NOTE, reading(), prof, correction())
+        self.assertEqual(L.default_scope(case), prof["name"])
+
+    def test_practice_notes_become_labelled_rows(self):
+        from scope.data.handwritten import load_practice
+
+        practice = load_practice()
+        self.assertEqual(len(practice), 25)
+        votes = [L.make_vote(f"note:{practice[0]['id']}", L.voter_hash(x), "high") for x in "abc"]
+        votes.append(L.make_vote(f"note:{practice[1]['id']}", L.voter_hash("a"), "low"))
+        rows = L.community_rows({"votes": votes}, practice)
+        self.assertEqual([(r["id"], r["risk"], r["votes"]) for r in rows], [(practice[0]["id"], "high", 3)])
+        with self.assertRaises(L.LearningError):
+            L.make_vote("note:../x", L.voter_hash("a"), "high")
+        with self.assertRaises(L.LearningError):
+            L.make_vote(f"note:{practice[0]['id']}", L.voter_hash("a"), "agree")
+
+    def test_own_model_learns_from_agreed_practice_notes(self):
+        from scope import ownmodel as OM
+        from scope.data.handwritten import load_practice
+
+        practice = load_practice()
+        votes = [L.make_vote(f"note:{n['id']}", L.voter_hash(x), n["risk"]) for n in practice for x in "abc"]
+        rows = OM.dataset({"votes": votes, "approved": []}, experts=[], practice=practice)
+        self.assertEqual({r["source"] for r in rows}, {"community"})
+        self.assertEqual(len(rows), 25)
 
 
 if __name__ == "__main__":

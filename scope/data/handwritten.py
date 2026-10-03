@@ -10,6 +10,7 @@ from scope.text import Span, bio_to_spans, char_spans_to_bio, tokenize
 HANDWRITTEN_PATH = Path(__file__).with_name("handwritten.txt")
 REALISTIC_PATH = Path(__file__).with_name("realistic.txt")
 STRESS_PATH = Path(__file__).with_name("stress.txt")
+PRACTICE_PATH = Path(__file__).with_name("practice.txt")
 _MARK_RE = re.compile(r"\[\[(.+?)\|([A-Z_]+)\]\]")
 
 
@@ -31,6 +32,11 @@ def parse_marked(marked: str) -> tuple[str, list[tuple[str, int, int]]]:
 
 def load_realistic() -> list[dict]:
     return load_handwritten(REALISTIC_PATH, style="realistic")
+
+
+def load_practice() -> list[dict]:
+    """Fictional practice notes that SCOPE users label together (community labelling)."""
+    return load_handwritten(PRACTICE_PATH, style="practice")
 
 
 def load_stress() -> list[dict]:

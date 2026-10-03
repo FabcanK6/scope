@@ -35,14 +35,26 @@ def expert_rows() -> list[dict]:
             for r in load_handwritten() + load_realistic() + load_stress() if r.get("risk") in RISKS]
 
 
-def dataset(library: dict | None = None, experts: list[dict] | None = None) -> list[dict]:
+def dataset(library: dict | None = None, experts: list[dict] | None = None,
+            practice: list[dict] | None = None) -> list[dict]:
+    """Expert notes, practice notes the community agreed on (both also used to test the model), and approved
+    shared cases (training only)."""
     rows = list(experts if experts is not None else expert_rows())
     if library:
         from scope import learning as L
 
+        if practice is None:
+            from scope.data.handwritten import load_practice
+
+            practice = load_practice()
+        rows += [{"text": r["text"], "risk": r["risk"], "source": "community", "id": r["id"]}
+                 for r in L.community_rows(library, practice)]
         rows += [{"text": r["text"], "risk": r["risk"], "source": "shared", "id": r["id"]}
                  for r in L.training_rows(library) if r.get("risk") in RISKS]
     return rows
+
+
+TESTED = ("expert", "community")  # labelled by people independently of SCOPE: fair to test on
 
 
 def _pipeline():
@@ -59,8 +71,8 @@ def evaluate(rows: list[dict]) -> dict:
     cases are always in the training folds, except a shared copy of a note being tested."""
     from sklearn.model_selection import StratifiedKFold
 
-    experts = [r for r in rows if r["source"] == "expert"]
-    shared = [r for r in rows if r["source"] != "expert"]
+    experts = [r for r in rows if r["source"] in TESTED]
+    shared = [r for r in rows if r["source"] not in TESTED]
     y = np.array([r["risk"] for r in experts])
     if len(experts) < FOLDS * 2 or min(np.sum(y == k) for k in set(y)) < FOLDS:
         return {"accuracy": None, "high_recall": None, "tested": 0}
@@ -96,15 +108,17 @@ class OwnModel:
         return {"risk": risk, "confidence": by_risk[risk], "probs": by_risk}
 
 
-def train(library: dict | None = None, experts: list[dict] | None = None, bar: float = ACTIVATION_BAR) -> OwnModel:
-    rows = dataset(library, experts)
+def train(library: dict | None = None, experts: list[dict] | None = None, bar: float = ACTIVATION_BAR,
+          practice: list[dict] | None = None) -> OwnModel:
+    rows = dataset(library, experts, practice)
     score = evaluate(rows)
     pipeline = _pipeline().fit([r["text"] for r in rows], [r["risk"] for r in rows])
     acc, rec = score["accuracy"], score["high_recall"]
     report = {
         **score, "bar": bar, "high_recall_bar": HIGH_RECALL_BAR,
         "expert_notes": sum(r["source"] == "expert" for r in rows),
-        "shared_cases": sum(r["source"] != "expert" for r in rows),
+        "community_notes": sum(r["source"] == "community" for r in rows),
+        "shared_cases": sum(r["source"] == "shared" for r in rows),
         "trained": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "data": hashlib.sha256("|".join(sorted(r["id"] for r in rows)).encode()).hexdigest()[:10],
         "active": acc is not None and acc >= bar and (rec is None or rec >= HIGH_RECALL_BAR),

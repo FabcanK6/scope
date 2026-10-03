@@ -6,8 +6,14 @@ it reads a similar note, for every user, from that moment on. No new version of 
 
 * Corrections become rulings in the prompt (retrieved by similarity, like a reviewer remembering similar cases).
 * Confirmations and corrections together are the training data for SCOPE's own model (the next layer).
-* Nothing changes SCOPE's behaviour without a person approving it, and every case keeps who, when and why: the audit
+* Nothing changes SCOPE's behaviour without people agreeing to it, and every case keeps who, when and why: the audit
   trail a sponsor would ask for.
+
+Community review: a shared case goes live when at least ``AGREE_MIN`` different people agree (the person who shared
+it counts as one) and at least ``AGREE_SHARE`` of the votes agree; it is dropped when as many disagree. People also
+label fictional practice notes ("what risk would you give this visit?"); a note's label counts once ``AGREE_MIN``
+people agree on it and nobody put it two levels away. A curator can still approve, reject or retire anything.
+People are anonymous: each browser gets a random id, stored only as a short hash, so one browser votes once per item.
 
 Storage is a folder of small JSON files (``pending/``, ``approved/``, ``rejected/``), either local (tests, running
 on your own computer) or a private Hugging Face dataset repo (the public app). Only fictional or de-identified notes
@@ -26,6 +32,10 @@ from pathlib import Path
 from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 FOLDERS = ("pending", "approved", "rejected")
+AGREE_MIN = 3  # different people who must agree before a case or a practice-note label counts
+AGREE_SHARE = 0.75  # and the share of votes that must agree
+RISKS = ("low", "medium", "high")
+VOTE_VALUES = {"note": set(RISKS), "case": {"agree", "disagree"}}
 KINDS = ("correction", "confirmation")
 ALL_STUDIES = "all"
 MIN_SIMILARITY = 0.12  # rulings less similar than this to the note are not shown to the model
@@ -48,7 +58,13 @@ def note_hash(text: str) -> str:
     return hashlib.sha256(_norm_note(text).encode()).hexdigest()[:16]
 
 
-def make_case(kind: str, note: str, rec: dict, profile: dict, correction: dict | None = None, by: str = "") -> dict:
+def voter_hash(browser_id: str) -> str:
+    """The only trace of a person: a short hash of their browser's random id."""
+    return hashlib.sha256(f"scope-voter:{browser_id}".encode()).hexdigest()[:16]
+
+
+def make_case(kind: str, note: str, rec: dict, profile: dict, correction: dict | None = None, by: str = "",
+              voter: str = "") -> dict:
     """A shareable case from a reading. ``correction`` (for kind 'correction'): issue, display, status, severity,
     quote, reason, risk."""
     if kind not in KINDS:
@@ -62,6 +78,7 @@ def make_case(kind: str, note: str, rec: dict, profile: dict, correction: dict |
         "kind": kind,
         "created": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
         "by": by.strip()[:60],
+        "voter": voter,
         "note": note,
         "note_hash": note_hash(note),
         "study": {"name": profile.get("name", ""), "version": profile.get("version", ""), "protocol": protocol},
@@ -90,6 +107,25 @@ def validate_case(case: dict) -> dict:
     return case
 
 
+def make_vote(item: str, voter: str, value: str, why: str = "") -> dict:
+    """item: 'note:<practice note id>' (value low/medium/high) or 'case:<case id>' (value agree/disagree)."""
+    return validate_vote({"item": item, "voter": voter, "value": value, "why": why.strip()[:200],
+                          "created": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")})
+
+
+def validate_vote(vote: dict) -> dict:
+    m = re.fullmatch(r"(note|case):([A-Za-z0-9_-]{2,40})", str(vote.get("item", "")))
+    if not m or not re.fullmatch(r"[0-9a-f]{8,32}", str(vote.get("voter", ""))):
+        raise LearningError("bad vote")
+    if vote.get("value") not in VOTE_VALUES[m.group(1)]:
+        raise LearningError("bad vote value")
+    return vote
+
+
+def _vote_path(vote: dict) -> str:
+    return f"votes/{vote['item'].replace(':', '-')}/{vote['voter']}.json"
+
+
 # ---------------------------------------------------------------------------
 # storage
 # ---------------------------------------------------------------------------
@@ -102,6 +138,10 @@ class Store:
         raise NotImplementedError
 
     def add(self, case: dict) -> None:  # pragma: no cover
+        raise NotImplementedError
+
+    def add_vote(self, vote: dict) -> None:  # pragma: no cover
+        """One file per person per item: voting again replaces the earlier vote."""
         raise NotImplementedError
 
     def decide(self, case: dict, approve: bool, applies_to: str | None = None, note: str = "") -> dict:
@@ -145,7 +185,19 @@ class LocalStore(Store):
                     cases.append({**json.loads(p.read_text()), "status": folder})
                 except ValueError:
                     continue
-        return _group(cases)
+        votes = []
+        for p in sorted((self.root / "votes").glob("*/*.json")):
+            try:
+                votes.append(validate_vote(json.loads(p.read_text())))
+            except (ValueError, LearningError):
+                continue
+        return {**_group(cases), "votes": votes}
+
+    def add_vote(self, vote: dict) -> None:
+        validate_vote(vote)
+        path = self.root / _vote_path(vote)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(vote, ensure_ascii=False))
 
     def add(self, case: dict) -> None:
         validate_case(case)
@@ -183,7 +235,7 @@ class HFStore(Store):
         hub = self._hub()
         try:
             local = hub.snapshot_download(repo_id=self.repo_id, repo_type="dataset", token=self.token,
-                                          allow_patterns=[f"{f}/*.json" for f in FOLDERS])
+                                          allow_patterns=[f"{f}/*.json" for f in FOLDERS] + ["votes/*/*.json"])
         except Exception as e:
             raise LearningError(f"Could not read the shared library ({type(e).__name__}).") from e
         return LocalStore(local).load()
@@ -202,6 +254,13 @@ class HFStore(Store):
         data = json.dumps(case, ensure_ascii=False, indent=1).encode()
         self._commit([hub.CommitOperationAdd(path_in_repo=f"pending/{case['id']}.json", path_or_fileobj=data)],
                      f"New {case['kind']} {case['id']} (pending review)")
+
+    def add_vote(self, vote: dict) -> None:
+        validate_vote(vote)
+        hub = self._hub()
+        data = json.dumps(vote, ensure_ascii=False).encode()
+        self._commit([hub.CommitOperationAdd(path_in_repo=_vote_path(vote), path_or_fileobj=data)],
+                     f"Vote on {vote['item']}")
 
     def _move(self, old: dict, new: dict) -> None:
         hub = self._hub()
@@ -311,4 +370,71 @@ def training_rows(library: dict[str, list[dict]]) -> list[dict]:
             risk = x.get("risk") or None  # without the expert's risk level the row is used for topics only
         rows.append({"id": c["id"], "text": c["note"], "risk": risk, "issues": sorted(active), "severities": active,
                      "study": (c.get("study") or {}).get("name"), "kind": c["kind"]})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# community review
+# ---------------------------------------------------------------------------
+def votes_for(library: dict, item: str) -> list[dict]:
+    return [v for v in library.get("votes", []) if v["item"] == item]
+
+
+def note_consensus(values: list[str]) -> str | None:
+    """The agreed risk for a practice note: at least AGREE_MIN votes for one level, at least AGREE_SHARE of all
+    votes, and nobody two levels away (low against high)."""
+    if not values:
+        return None
+    top = max(RISKS, key=lambda r: (values.count(r), -RISKS.index(r)))
+    n = values.count(top)
+    far = [v for v in values if abs(RISKS.index(v) - RISKS.index(top)) >= 2]
+    if n >= AGREE_MIN and n / len(values) >= AGREE_SHARE and not far:
+        return top
+    return None
+
+
+def case_tally(case: dict, library: dict) -> tuple[int, int]:
+    """(agree, disagree) for a shared case; the person who shared it counts as one agree."""
+    votes = [v for v in votes_for(library, f"case:{case['id']}") if v["voter"] != case.get("voter")]
+    agree = sum(v["value"] == "agree" for v in votes) + 1
+    return agree, sum(v["value"] == "disagree" for v in votes)
+
+
+def case_verdict(case: dict, library: dict) -> str | None:
+    agree, disagree = case_tally(case, library)
+    total = agree + disagree
+    if agree >= AGREE_MIN and agree / total >= AGREE_SHARE:
+        return "approve"
+    if disagree >= AGREE_MIN and disagree / total >= AGREE_SHARE:
+        return "reject"
+    return None
+
+
+def default_scope(case: dict) -> str:
+    """A ruling made under a study's own protocol applies to that study; one made under SCOPE standard to all."""
+    name = (case.get("study") or {}).get("name") or ""
+    return ALL_STUDIES if not name or name.startswith("SCOPE standard") else name
+
+
+def apply_consensus(store: Store, library: dict) -> list[dict]:
+    """Approve or drop every pending case the community has agreed on. Returns the cases decided."""
+    decided = []
+    for case in list(library.get("pending", [])):
+        verdict = case_verdict(case, library)
+        if verdict:
+            agree, disagree = case_tally(case, library)
+            decided.append(store.decide(case, approve=verdict == "approve", applies_to=default_scope(case),
+                                        note=f"Community review: {agree} agreed, {disagree} disagreed"))
+    return decided
+
+
+def community_rows(library: dict, practice: list[dict]) -> list[dict]:
+    """Practice notes whose risk the community agreed on, as labelled rows (accuracy check, SCOPE's own model)."""
+    rows = []
+    for note in practice:
+        values = [v["value"] for v in votes_for(library, f"note:{note['id']}")]
+        risk = note_consensus(values)
+        if risk:
+            rows.append({"id": note["id"], "text": note["text"], "risk": risk, "issues": [], "risk_only": True,
+                         "votes": len(values), "proposed": note.get("risk")})
     return rows
