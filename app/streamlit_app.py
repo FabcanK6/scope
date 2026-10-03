@@ -473,8 +473,9 @@ def profile_editor() -> None:
         "rubric written by an experienced clinical research professional) plus the rules accepted from the protocol. "
         "Adjust it below: what counts as minor, major or critical, study-specific topics and rules, escalation, and "
         "corrections for SCOPE to learn from.")
-    st.info("Changes last for this browser session. Use **Download this profile** in the sidebar to keep them, and "
-            "load the file next time. Every result shows which profile and version scored it.")
+    st.info("**Save changes** keeps this study in this browser under ★ in the study list, ready for your next visit. "
+            "To use it on another computer or share it, use **Download this profile** in the sidebar. Every result "
+            "shows which profile and version scored it.")
     protocol_review()
     st.divider()
     st.subheader("This profile")
@@ -727,7 +728,7 @@ with tab_one:
                 "sidebar, or add `GEMINI_API_KEY` to the app's secrets.")
     elif note.strip():
         try:
-            with st.spinner("Reading the note..."):
+            with st.spinner("Reading the note (usually under 30 seconds)..."):
                 rec = cached_llm("record", note, lambda: parser.analyze(note))
         except LLMError as e:
             show_llm_error(e)
@@ -779,7 +780,8 @@ with tab_one:
                                                 "Claimed quote": f["evidence"]} for f in ignored]),
                                  hide_index=True, width="stretch")
             prof_used = rec.get("profile") or {}
-            st.caption(f"Read by {rec.get('provider', 'Google Gemini')} {rec.get('model') or ''}; risk computed "
+            took = f" in {rec['seconds']:.0f} s" if rec.get("seconds") else ""
+            st.caption(f"Read by {rec.get('provider', 'Google Gemini')} {rec.get('model') or ''}{took}; risk computed "
                        "from the verified active findings "
                        f"with the study profile {prof_used.get('name', 'SCOPE standard')} "
                        f"(v{prof_used.get('version', '3.1')}).")

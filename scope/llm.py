@@ -26,6 +26,10 @@ from scope import profile as _profile
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "")
+# Gemini 3 models think before answering; their default ("medium") can take over a minute on a long note. Reading a
+# note is careful extraction, not puzzle solving, and SCOPE's code does the scoring and date counting, so "low" keeps
+# answers fast. Override with GEMINI_THINKING (low / medium / high).
+THINKING_LEVEL = os.environ.get("GEMINI_THINKING", "low")
 STATUSES = ["active", "resolved_on_site", "no_issue"]
 SEVERITIES = ["minor", "major", "critical"]
 
@@ -72,6 +76,10 @@ class ModelBusy(LLMError):
     """Temporary overload (HTTP 500/502/503/504 or a timeout); retry, then try another model."""
 
 
+class ModelSlow(ModelBusy):
+    """The model did not answer within the timeout: go straight to the next model (waiting again rarely helps)."""
+
+
 # ---------------------------------------------------------------------------
 # Gemini REST client (standard library only)
 # ---------------------------------------------------------------------------
@@ -110,6 +118,8 @@ class GeminiClient(LLMClient):
     provider = "Google Gemini"
     retry_delays = (2.0, 5.0)  # waits before the 2nd and 3rd attempt on a busy model
     max_models = 6  # how many models to try before giving up
+    time_budget = 150.0  # seconds: stop trying further models after this, so nobody waits for many minutes
+    slow_for = 600.0  # seconds a model that timed out is tried last
 
     def __init__(self, api_key: str, model: str | None = None, timeout: int = 60):
         super().__init__()
@@ -121,6 +131,9 @@ class GeminiClient(LLMClient):
         self.timeout = timeout
         self._listed: list[str] | None = None
         self._sleep = time.sleep
+        self._clock = time.monotonic
+        self._slow: dict[str, float] = {}  # model -> when it last timed out
+        self._no_thinking: set[str] = set()  # models that refused thinkingConfig
 
     # -- transport (patched in tests) -------------------------------------
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -146,10 +159,10 @@ class GeminiClient(LLMClient):
                 raise ModelBusy(f"HTTP {e.code}") from e
             raise LLMError(f"Gemini API error {e.code}: {_message(detail)}") from e
         except TimeoutError as e:
-            raise ModelBusy("timeout") from e
+            raise ModelSlow("timeout") from e
         except urllib.error.URLError as e:
             if isinstance(e.reason, TimeoutError):
-                raise ModelBusy("timeout") from e
+                raise ModelSlow("timeout") from e
             raise LLMError(f"Could not reach the Gemini API ({e.reason}).") from e
 
     # -- model selection --------------------------------------------------
@@ -177,8 +190,18 @@ class GeminiClient(LLMClient):
             except ModelBusy:
                 self._listed = []
         order = list(dict.fromkeys(m for m in [self.model, self.preferred, *self._listed, "gemini-flash-latest"] if m))
-        order = [m for m in order if m not in self.avoid] + [m for m in order if m in self.avoid]
+        now = self._clock()
+        slow = {m for m, t in self._slow.items() if now - t < self.slow_for}
+        last = self.avoid | slow
+        order = [m for m in order if m not in last] + [m for m in order if m in last]
         return order[: self.max_models]
+
+    def _body_for(self, model: str, body: dict) -> dict:
+        """Gemini 3 models get a low thinking level (see THINKING_LEVEL); older models keep their defaults."""
+        if not re.match(r"gemini-([3-9]|\d\d)", model) or model in self._no_thinking or not THINKING_LEVEL:
+            return body
+        config = {**body["generationConfig"], "thinkingConfig": {"thinkingLevel": THINKING_LEVEL}}
+        return {**body, "generationConfig": config}
 
     # -- generation -------------------------------------------------------
     def generate(self, system: str, prompt: str, schema: dict | None = None) -> str:
@@ -192,10 +215,21 @@ class GeminiClient(LLMClient):
         if schema is not None:
             body["generationConfig"].update(responseMimeType="application/json", responseSchema=schema)
         last = None
+        started = self._clock()
         for model in self.candidates():
+            if last is not None and self._clock() - started > self.time_budget:
+                break  # tried long enough: say so instead of keeping the user waiting
             try:
-                data = self._call_with_retry(f"models/{model}:generateContent", body)
+                try:
+                    data = self._call_with_retry(f"models/{model}:generateContent", self._body_for(model, body))
+                except LLMError as e:
+                    if "thinking" not in str(e).lower() or model in self._no_thinking:
+                        raise
+                    self._no_thinking.add(model)  # this model does not take a thinking level: ask without it
+                    data = self._call_with_retry(f"models/{model}:generateContent", body)
             except (ModelNotFound, ModelBusy, QuotaExceeded) as e:
+                if isinstance(e, ModelSlow):
+                    self._slow[model] = self._clock()
                 if not isinstance(last, QuotaExceeded):  # report the quota problem if any model hit it
                     last = e
                 continue
@@ -215,8 +249,8 @@ class GeminiClient(LLMClient):
         for delay in (*self.retry_delays, None):
             try:
                 return self._request("POST", path, body)
-            except ModelBusy:
-                if delay is None:
+            except ModelBusy as e:
+                if delay is None or isinstance(e, ModelSlow):
                     raise
                 self._sleep(delay)
         raise AssertionError("unreachable")

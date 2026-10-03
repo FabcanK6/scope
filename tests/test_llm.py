@@ -8,6 +8,7 @@ from scope.llm import (
     LLMError,
     ModelBusy,
     ModelNotFound,
+    ModelSlow,
     QuotaExceeded,
     draft_followup,
     verify_quote,
@@ -35,6 +36,7 @@ class FakeClient(GeminiClient):
 
     def _request(self, method, path, body=None):
         self.calls.append((method, path))
+        self.bodies = getattr(self, 'bodies', []) + [body]
         if method == "GET":
             return {"models": [{"name": f"models/{m}", "supportedGenerationMethods": ["generateContent"]}
                                for m in self.models]}
@@ -42,6 +44,46 @@ class FakeClient(GeminiClient):
         if isinstance(reply, Exception):
             raise reply
         return reply
+
+
+class TestSpeed(unittest.TestCase):
+    """A reading should take seconds, not minutes (live: Gemini 3.8 Flash at its default thinking timed out)."""
+
+    def test_gemini_3_thinks_low_older_models_unchanged(self):
+        client = FakeClient([fake_response("ok"), fake_response("ok")], models=("gemini-3.8-flash",))
+        client.generate("s", "p")
+        self.assertEqual(client.bodies[-1]["generationConfig"]["thinkingConfig"], {"thinkingLevel": "low"})
+        client = FakeClient([fake_response("ok")], models=("gemini-2.5-flash",))
+        client.generate("s", "p")
+        self.assertNotIn("thinkingConfig", client.bodies[-1]["generationConfig"])
+
+    def test_model_that_refuses_a_thinking_level_is_asked_without(self):
+        client = FakeClient([LLMError("Gemini API error 400: Thinking level is not supported for this model."),
+                             fake_response("ok")], models=("gemini-3-flash",))
+        self.assertEqual(client.generate("s", "p"), "ok")
+        self.assertNotIn("thinkingConfig", client.bodies[-1]["generationConfig"])
+        self.assertIn("gemini-3-flash", client._no_thinking)
+
+    def test_timeout_moves_on_at_once_and_slow_model_goes_last(self):
+        client = FakeClient([ModelSlow("timeout"), fake_response("ok"), fake_response("ok")],
+                            models=("gemini-9-flash", "gemini-8-flash"))
+        self.assertEqual(client.generate("s", "p"), "ok")
+        self.assertEqual(client.waits, [])  # no waiting and retrying a model that timed out
+        self.assertEqual(client.model, "gemini-8-flash")
+        order = client.candidates()
+        self.assertLess(order.index("gemini-8-flash"), order.index("gemini-9-flash"))  # the slow one goes last
+        client.generate("s", "p")
+        self.assertEqual(client.calls[-1], ("POST", "models/gemini-8-flash:generateContent"))
+
+    def test_time_budget(self):
+        client = FakeClient([ModelSlow("timeout")] * 6, models=("gemini-9-flash", "gemini-8-flash", "gemini-7-flash"))
+        t = iter([0, 0, 0, 70, 70, 140, 140, 220, 220, 300, 300])
+        client._clock = lambda: next(t)
+        with self.assertRaises(LLMError) as ctx:
+            client.generate("s", "p")
+        self.assertEqual(str(ctx.exception), BUSY_MESSAGE)
+        posts = [c for c in client.calls if c[0] == "POST"]
+        self.assertLess(len(posts), 4)  # gave up once the budget was spent, not after every model
 
 
 class TestLLM(unittest.TestCase):

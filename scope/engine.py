@@ -381,7 +381,9 @@ class LLMParser:
         raise Unreadable(reason, raw, self.client.model)
 
     def predict(self, text: str) -> dict:
+        started = time.monotonic()
         data = self.read(text)
+        seconds = round(time.monotonic() - started, 1)
         raw_answer = copy.deepcopy(data)  # exactly what the LLM said, before SCOPE adds its checks
         tokens = tokenize(text)
         char_spans: list[tuple[str, int, int]] = []
@@ -472,7 +474,7 @@ class LLMParser:
             "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
             "checks": checks,
             "backend": self.name,
-            "model": self.client.model, "provider": getattr(self.client, "provider", ""),
+            "model": self.client.model, "provider": getattr(self.client, "provider", ""), "seconds": seconds,
             "llm_output": raw_answer, "profile": _profile.label(self.profile),
             "topic_names": {c: (t["display"], t["group"]) for c, t in _profile.topic_map(self.profile).items()},
         }
