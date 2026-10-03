@@ -2,9 +2,9 @@
 
 [![tests](https://github.com/FabcanK6/scope/actions/workflows/tests.yml/badge.svg)](https://github.com/FabcanK6/scope/actions/workflows/tests.yml)
 
-SCOPE reads free-text clinical trial monitoring visit notes (formal visit reports, quick field notes, visit e-mails) and turns each one into a record a CRA or study manager can act on:
+SCOPE reads free-text clinical trial monitoring visit notes (formal visit reports, quick field notes, visit e-mails) and turns each one into a record anyone working on the study (monitor, coordinator, study manager) can act on:
 
-- **Risk level** (high / medium / low) computed by a severity rubric reviewed by an experienced CRA, with the reason ("1 critical finding")
+- **Risk level** (high / medium / low) computed by a severity rubric reviewed by an experienced clinical research professional, with the reason ("1 critical finding")
 - **Every finding with its evidence**: what is an active problem, what was fixed during the visit, and what was checked and fine, each with the sentence from the note that shows it
 - **Visit details**: visit type, date, site, monitor, PI, screened and enrolled counts
 - **Open action items** with owner and due date
@@ -21,7 +21,7 @@ All notes, sites and people in this repository are fictional.
 
 Monitoring visit notes hold the earliest warning signs at a trial site: a consent signed after procedures, a hospitalization nobody reported as an SAE, a dosing error. But they are long free text, and most of what they say is "checked, no problem". Someone has to read every note to find the few lines that matter, track the follow-ups, and show later that each finding was handled.
 
-SCOPE does the first read. It is built to earn a CRA's trust rather than to impress: every risk call comes with the findings that caused it, every finding comes with a quote from the note, and anything that cannot be traced back to the note is thrown away.
+SCOPE does the first read. It is built to earn its users' trust rather than to impress: every risk call comes with the findings that caused it, every finding comes with a quote from the note, and anything that cannot be traced back to the note is thrown away.
 
 ## How it works
 
@@ -36,7 +36,7 @@ note ─► LLM (Google Gemini): instructions + severity rubric + three worked e
 - **The LLM reads; code decides.** The model's job is reading comprehension: is this sentence a problem, something fixed on site, or a confirmation that all is well? The risk level is never the model's opinion. It is computed from the verified findings with a fixed rubric, so the same findings always give the same answer and the rubric can be changed in one place (`scope/llm.py`).
 - **Nothing without evidence.** Every finding must quote the note. SCOPE checks each quote (ignoring case and spacing) and drops findings whose quote is not there, as well as names, dates and action items that do not appear in the note. Anything dropped is listed so the reviewer can see it.
 - **Fails loudly, not quietly.** An empty or garbled LLM answer is retried and never scored (an empty answer would otherwise look like a clean, low-risk visit). A plain-code safety net also scans the note for words that signal a possible SAE, consent problem, dosing error or IRB lapse; if the LLM reported nothing on that topic, SCOPE shows a red safety alert. The LLM is called with Gemini's default temperature, as Google recommends for Gemini 3 models (a low temperature can cause looping and degraded answers).
-- **Few-shot, not fine-tuned.** The prompt contains the rubric and three worked examples in three note styles (a formal report with problems fixed on site and one open major issue, bullet notes with a critical finding, and a short e-mail with only a minor issue). The examples were written for the prompt and are not in any test set or in the app's example notes, so the demo and the evaluation are not answered in advance (a unit test checks this). Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model. The app's **Accuracy check** tab runs SCOPE on these labelled notes and shows where it agrees and disagrees with the CRA's labels.
+- **Few-shot, not fine-tuned.** The prompt contains the rubric and three worked examples in three note styles (a formal report with problems fixed on site and one open major issue, bullet notes with a critical finding, and a short e-mail with only a minor issue). The examples were written for the prompt and are not in any test set or in the app's example notes, so the demo and the evaluation are not answered in advance (a unit test checks this). Improving SCOPE means improving the rubric and examples and re-running the evaluation, not retraining a model. The app's **Accuracy check** tab runs SCOPE on these labelled notes and shows where it agrees and disagrees with the expert labels.
 - **Free and light.** It runs on the free tier of the Gemini API through Python's standard library; the app has no ML framework to install. Answers are cached for 24 hours so repeated notes cost nothing, and each visitor is capped at 25 new requests.
 
 ### Why an LLM and not the fine-tuned model
@@ -47,19 +47,19 @@ The first version used a fine-tuned BERT model (results below). It was near-perf
 
 Protocols disagree on the things that decide risk: one defines an event as an SAE and wants it reported within 2 business days, another allows 3 calendar days, a third says the same event is only an AE (or that disease progression or a pre-planned hospitalization is not an SAE at all). So SCOPE reads the protocol first:
 
-1. Upload the protocol (PDF, Word or text) in the Study profile tab and choose a starting preset.
+1. Upload the protocol (PDF, Word or text) in the Study setup tab and choose a starting preset.
 2. The LLM drafts the study-specific rules a monitor needs: SAE definitions, exceptions and reporting deadlines, other expedited reporting, visit windows, key assessments, eligibility, dosing hold and stop rules, storage and excursion handling, consent, and the protocol's list of important deviations. Long protocols are cut to the pages that matter for monitoring.
 3. SCOPE checks every rule's quote against the protocol text and finds its page; rules whose quote is not in the protocol are dropped.
-4. A lead CRA rewords, re-grades or rejects each rule, then creates the study profile. Accepted rules carry their protocol citation (number, version, page), and the change is logged.
+4. The study lead rewords, re-grades or rejects each rule, then creates the study profile. Accepted rules carry their protocol citation (number, version, page), and the change is logged.
 5. Every visit for that study is then judged against its own protocol: the LLM is told that study rules override general practice and to work out elapsed time (calendar or business days) from the dates in the note.
 
 `profiles/example_protocol_ZLV-301.pdf` is a short fictional protocol to try this with. Free-tier LLM requests may be used by the provider, so only use public (e.g. ClinicalTrials.gov) or fictional protocols until an enterprise LLM agreement is in place.
 
-### Severity rubric (v3)
+### Severity rubric (v3.2)
 
-The rubric was written and approved by an experienced CRA. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
+The rubric was written and approved by an experienced clinical research professional. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
 
-Two escalation rules weigh a problem the way a CRA does. A **repeat finding** (also found at an earlier visit, or an earlier action still open) is raised one level. A problem affecting **3 or more subjects**, or described as site-wide, is raised one level, up to major. Both can apply, so a minor gap that affects five subjects and was cited last visit becomes critical. The LLM only reports the facts (repeat, number of subjects, and a quote showing it); SCOPE applies the rules, and only when the quote is really in the note.
+Two escalation rules weigh a problem the way an experienced reviewer does. A **repeat finding** (also found at an earlier visit, or an earlier action still open) is raised one level. A problem affecting **3 or more subjects**, or described as site-wide, is raised one level, up to major. Both can apply, so a minor gap that affects five subjects and was cited last visit becomes critical. The LLM only reports the facts (repeat, number of subjects, and a quote showing it); SCOPE applies the rules, and only when the quote is really in the note.
 
 ### Issue types (22)
 
@@ -75,14 +75,14 @@ Each issue type has minor, major and critical examples in `scope/llm.py` (`RUBRI
 
 ### Study profiles: the rubric is a feature, not code
 
-Monitoring standards change with the protocol, the study and the sponsor, so the rubric lives in a **study profile** that a lead CRA can edit in the app (Study profile tab):
+Monitoring standards change with the protocol, the study and the sponsor, so the rubric lives in a **study profile** that the study lead can edit in the app (Study setup tab):
 
 - **Topics and severities**: change what counts as minor, major or critical, switch off topics that do not apply, or add study-specific topics.
 - **Study rules**: plain-language rules from the protocol ("A missed Cycle 1 Day 1 PK sample is critical"). They override the default rubric.
 - **Escalation and thresholds**: how many subjects make a problem widespread, how far that raises it, whether repeats escalate, and the points for medium and high risk.
-- **Learning from corrections**: any CRA can correct a result ("this should be minor, because..."). Once a lead CRA approves a correction, SCOPE shows it to the LLM as an example whenever it reads a similar note, so it adapts to the study without retraining. Notes with corrections can be re-checked in the Accuracy check.
+- **Learning from corrections**: any user can correct a result ("this should be minor, because..."). Once the study lead approves a correction, SCOPE shows it to the LLM as an example whenever it reads a similar note, so it adapts to the study without retraining. Notes with corrections can be re-checked in the Accuracy check.
 
-Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are saved and shared as JSON files (`profiles/example_oncology_study.json` is an example). The default profile, **SCOPE standard**, is rubric v3.1 below.
+Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are saved and shared as JSON files (`profiles/example_oncology_study.json` is an example). The default profile, **SCOPE standard**, is rubric v3.2 below.
 
 ## Setup (free Gemini API key)
 
@@ -98,9 +98,9 @@ Every change is versioned and logged, and every result records the profile name,
 GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
 ```
 
-**Stress test** (25 notes so far, growing to about 150): written to cover many writing styles, every visit type, all 22 issue types, both escalation rules and common traps (problems fixed on site, "no SAEs" negations, resolved past items, dates near the visit date). Labels were reviewed and approved by an experienced CRA, and none of these notes are in SCOPE's instructions, so this is the honest measure.
+**Stress test** (25 notes so far, growing to about 150): written to cover many writing styles, every visit type, all 22 issue types, both escalation rules and common traps (problems fixed on site, "no SAEs" negations, resolved past items, dates near the visit date). Labels were reviewed and approved by an experienced clinical research professional, and none of these notes are in SCOPE's instructions, so this is the honest measure.
 
-Test sets: **realistic** (7 long, formal notes in the style of real CRA reports, provided by an experienced CRA) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the rubric, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
+Test sets: **realistic** (7 long, formal notes in the style of real monitoring reports, provided by an experienced clinical research professional) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the rubric, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
 
 ### v1 training data
 
@@ -199,7 +199,7 @@ scope/
   engine.py            the LLM engine: prompt with rubric and worked examples, verification, record
   llm.py               Gemini client (standard library), rubric scoring, quote checks, follow-up letter
   record.py            visit record, date and count normalization, audit summary
-  profile.py           study profiles: editable rubric, study rules, escalation, CRA corrections
+  profile.py           study profiles: editable rubric, study rules, escalation, user corrections
   protocol.py          protocol intake: read a protocol, draft cited study rules, build a profile
   providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds
@@ -222,7 +222,7 @@ tests/                 unit tests (the LLM is replaced by a fake, so tests need 
 
 - Needs an internet connection and API quota. When the free quota runs out, the app says so; visitors can use their own free key.
 - LLM output can vary between runs and between model versions. Verification and the fixed rubric limit the impact, and `GEMINI_MODEL` pins a version; re-run the evaluation whenever the model changes.
-- The realistic test notes are few and shaped the prompt. Real use needs a larger, independent set of de-identified notes reviewed by CRAs.
+- The realistic test notes are few and shaped the prompt. Real use needs a larger, independent set of de-identified notes reviewed by experienced clinical research professionals.
 - The rubric reflects one experienced reviewer; organizations weight findings differently and should adapt it.
 - SCOPE supports human review; it does not replace it.
 

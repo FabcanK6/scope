@@ -1,7 +1,7 @@
 {
   "name": "Example - Phase II oncology study",
   "version": "1",
-  "description": "Example study profile built on SCOPE standard v3.1 (fictional study).",
+  "description": "Example study profile built on SCOPE standard v3.2 (fictional study).",
   "topics": [
     {
       "code": "SAE_REPORTING",
@@ -17,7 +17,7 @@
       "group": "Patient safety & consent",
       "display": "Adverse event recording",
       "minor": "one AE entered late",
-      "major": "AEs missing from EDC; grading or causality not assessed by the PI",
+      "major": "AEs missing from EDC or not graded. (The PI not assessing AEs is PI_OVERSIGHT, a separate problem.)",
       "critical": "",
       "enabled": true
     },
@@ -36,7 +36,7 @@
       "display": "Eligibility",
       "minor": "eligibility checklist unsigned but criteria met",
       "major": "eligibility evidence missing from source at randomization",
-      "critical": "ineligible subject randomized or dosed",
+      "critical": "ineligible subject randomized or dosed. Only report eligibility when a subject's eligibility is actually in doubt or undocumented; how eligibility questions get answered (e.g. by email from an absent PI) is PI_OVERSIGHT",
       "enabled": true
     },
     {
@@ -152,7 +152,7 @@
       "group": "Site operations",
       "display": "PI oversight",
       "minor": "one late sign-off",
-      "major": "PI not signing labs or eCRFs (a backlog or a long delay); PI unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, not a finding",
+      "major": "PI not signing labs or eCRFs (a backlog or a long delay); PI not assessing AEs (causality or grade); PI unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, not a finding",
       "critical": "",
       "enabled": true
     },
@@ -230,7 +230,7 @@
     {
       "date": "2026-10-03",
       "by": "Example",
-      "change": "Created from SCOPE standard v3.1: 3 study rules, enrollment off, imaging topic added"
+      "change": "Created from SCOPE standard v3.2: 3 study rules, enrollment off, imaging topic added"
     }
   ]
 }

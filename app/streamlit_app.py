@@ -83,7 +83,7 @@ def api_key() -> str | None:
 
 
 def current_profile() -> dict:
-    """The study profile in use in this browser session (default: SCOPE standard, rubric v3.1)."""
+    """The study profile in use in this browser session (default: SCOPE standard, rubric v3.2)."""
     if "profile" not in st.session_state:
         st.session_state["profile"] = P.default_profile()
     return st.session_state["profile"]
@@ -215,13 +215,13 @@ def findings_table(rec: dict, status: str) -> pd.DataFrame:
 
 
 def correction_form(note: str, rec: dict) -> None:
-    """Let a CRA correct SCOPE. Corrections are proposed; a lead CRA approves them in the Study profile tab."""
+    """Let a user correct SCOPE. Corrections are proposed; the study lead approves them in the Study setup tab."""
     prof = current_profile()
     topics = P.enabled_topics(prof)
     found = [f for f in rec.get("findings", []) if f.get("verified")]
     with st.expander("Disagree with SCOPE? Correct it"):
-        st.caption("Your correction is saved to the study profile as a proposal. Once a lead CRA approves it, SCOPE "
-                   "shows it to the LLM as an example whenever it reads a similar note.")
+        st.caption("Your correction is saved to the study profile as a proposal. Once the study lead approves it, "
+                   "SCOPE shows it to the AI model as an example whenever it reads a similar note.")
         with st.form(f"correct_{hashlib.sha256(note.encode()).hexdigest()[:8]}", clear_on_submit=True):
             options = [f"{f['display']} ({f['status'].replace('_', ' ')}"
                        f"{', ' + f.get('final_severity', f['severity']) if f['status'] == 'active' else ''})"
@@ -251,7 +251,7 @@ def correction_form(note: str, rec: dict) -> None:
                               if chosen else "missed")
                 P.add_correction(prof, note=note, issue=code, status=stat, severity=severity, quote=quote,
                                  reason=reason, scope_said=scope_said, cra_risk=cra_risk or None, who=who)
-                st.success("Correction saved as a proposal. Approve it in the Study profile tab, then download the "
+                st.success("Correction saved as a proposal. Approve it in the Study setup tab, then download the "
                            "profile to keep it.")
 
 
@@ -285,46 +285,55 @@ EXAMPLE_PROTOCOL = ROOT / "profiles" / "example_protocol_ZLV-301.pdf"
 EXAMPLE_PROFILE = ROOT / "profiles" / "example_oncology_study.json"
 
 
-def protocol_builder() -> None:
-    """Upload a protocol, let the LLM draft its study rules (quotes checked), and let a lead CRA accept them."""
-    st.subheader("Build a profile from a protocol")
-    st.markdown(
-        "SCOPE reads the protocol and drafts the rules that change how visits should be judged: what counts as an "
-        "SAE and its reporting deadline, visit windows, key eligibility criteria, dosing and storage rules, and what "
-        "the protocol calls an important deviation. Every rule comes with the exact quote and page, checked against "
-        "the protocol. Nothing is used until you accept it.")
-    st.warning("Free-tier requests may be used by the AI provider. Only upload protocols that are public (for "
-               "example from ClinicalTrials.gov) or fictional. Never upload a confidential sponsor protocol here.")
-    presets = {"SCOPE standard (rubric v3.1)": "standard", "The current profile": "current"}
-    if EXAMPLE_PROFILE.exists():
-        presets["Example oncology profile"] = "example"
-    c1, c2 = st.columns([1, 1])
-    base_choice = c1.selectbox("Start from", list(presets), key="pr_base")
-    upload = c2.file_uploader("Protocol (PDF, Word or text)", type=["pdf", "docx", "txt"], key="pr_file")
-    use_example = EXAMPLE_PROTOCOL.exists() and st.button("Use the example protocol (ZLV-301, fictional)")
-    source = None
-    if upload is not None:
-        source = (upload.name, upload.getvalue())
-    elif use_example:
-        source = (EXAMPLE_PROTOCOL.name, EXAMPLE_PROTOCOL.read_bytes())
-    if source and (use_example or st.button("Read the protocol", type="primary")):
-        if not parser:
-            st.info("Add a Gemini API key in the sidebar first.")
+def sidebar_protocol() -> None:
+    """Upload a protocol in the sidebar; the drafted rules are reviewed in the Study setup tab."""
+    upload = st.file_uploader("Upload the protocol (PDF, Word or text)", type=["pdf", "docx", "txt"],
+                              key="pr_file", help="SCOPE drafts the study's rules from it (SAE definitions and "
+                              "deadlines, visit windows, eligibility, dosing, storage, deviations). You review them "
+                              "before anything is used.")
+    source = (upload.name, upload.getvalue()) if upload is not None else None
+    go = source is not None and st.button("Read the protocol", type="primary", width="stretch")
+    if EXAMPLE_PROTOCOL.exists() and st.button("Try the example protocol (fictional)", width="stretch"):
+        source, go = (EXAMPLE_PROTOCOL.name, EXAMPLE_PROTOCOL.read_bytes()), True
+    st.caption("Only public (e.g. ClinicalTrials.gov) or fictional protocols on the free engine.")
+    if go and source:
+        if not parser_for_sidebar():
+            st.info("Set up the AI engine below first.")
             return
-        base = {"standard": P.default_profile, "current": current_profile,
-                "example": lambda: P.loads(EXAMPLE_PROFILE.read_text())}[presets[base_choice]]()
         try:
             pages = PR.read_document(*source)
+            base = current_profile()
             key = f"{PR.fingerprint(source[1])}:{P.fingerprint(base)}"
             with st.spinner("Reading the protocol..."):
-                draft = cached_llm("protocol", key, lambda: PR.draft_rules(parser.client, pages, base))
-            st.session_state["protocol_draft"] = {"file": source[0], "draft": draft, "base": base}
+                draft = cached_llm("protocol", key, lambda: PR.draft_rules(parser_for_sidebar().client, pages, base))
+            st.session_state["protocol_draft"] = {"file": source[0], "draft": draft}
         except LLMError as e:
-            show_llm_error(e)
+            st.error(str(e))
+    pd_state = st.session_state.get("protocol_draft")
+    if pd_state:
+        st.success(f"{len(pd_state['draft']['rules'])} rules drafted from {pd_state['file']}. Review them in the "
+                   "**Study setup** tab.")
+
+
+def parser_for_sidebar():
+    return get_parser()
+
+
+def protocol_review() -> None:
+    """Review the rules drafted from a protocol and turn the accepted ones into a study profile."""
     pd_state = st.session_state.get("protocol_draft")
     if not pd_state:
+        st.info("Upload the study protocol in the sidebar (step 1). SCOPE drafts the study's rules from it, each with "
+                "the exact quote and page, and you review them here before anything is used.")
         return
-    draft, base = pd_state["draft"], pd_state["base"]
+    st.subheader("Rules drafted from the protocol")
+    presets = {"SCOPE standard": "standard", "The current profile": "current"}
+    if EXAMPLE_PROFILE.exists():
+        presets["Example oncology profile"] = "example"
+    base_choice = st.selectbox("Add the accepted rules to", list(presets), key="pr_base")
+    base = {"standard": P.default_profile, "current": current_profile,
+            "example": lambda: P.loads(EXAMPLE_PROFILE.read_text())}[presets[base_choice]]()
+    draft = pd_state["draft"]
     study = draft["study"]
     st.markdown(f"**{study.get('protocol_number') or pd_state['file']}** "
                 f"{study.get('version') or ''} · {study.get('title') or ''}  \n"
@@ -368,12 +377,13 @@ def protocol_builder() -> None:
 def profile_editor() -> None:
     prof = current_profile()
     st.markdown(
-        "A study profile is SCOPE's rubric for one study. Start from **SCOPE standard** (rubric v3.1, written by an "
-        "experienced CRA), then adjust it to the protocol: change what counts as minor, major or critical, add "
-        "study-specific topics and rules, tune escalation, and approve CRA corrections so SCOPE learns from them.")
+        "A study profile holds the rules SCOPE scores this study by. It starts from **SCOPE standard** (a severity "
+        "rubric written by an experienced clinical research professional) plus the rules accepted from the protocol. "
+        "Adjust it below: what counts as minor, major or critical, study-specific topics and rules, escalation, and "
+        "corrections for SCOPE to learn from.")
     st.info("Changes last for this browser session. Use **Download this profile** in the sidebar to keep them, and "
             "load the file next time. Every result shows which profile and version scored it.")
-    protocol_builder()
+    protocol_review()
     st.divider()
     st.subheader("This profile")
     if prof.get("protocol"):
@@ -415,7 +425,7 @@ def profile_editor() -> None:
     high = e5.number_input("Points for high risk", 2, 60, th["high"], key="pf_high")
     st.caption("Points: minor 1, major 3, critical 6, worst finding per topic.")
 
-    st.subheader("CRA corrections")
+    st.subheader("Corrections")
     edited_corr = None
     if prof["corrections"]:
         st.caption("Tick **Approved** to let SCOPE learn from a correction. Delete a row to drop it.")
@@ -489,18 +499,41 @@ st.title("🩺 SCOPE")
 st.caption("Site Communication & Oversight Processing Engine · reads free-text site-visit notes and returns a "
            "risk level, every finding with its evidence, the action items, and a draft follow-up letter")
 
+def load_example_note() -> None:
+    choice = st.session_state.get("example_pick")
+    if choice:
+        st.session_state["note"] = examples()[choice]
+
+
 with st.sidebar:
-    st.markdown("**Example notes**")
-    for label, text in examples().items():
-        if st.button(label, width="stretch"):
-            st.session_state["note"] = text
-    st.caption("All notes, sites and people in this app are fictional.")
+    # 1. the study: protocol first, everything else is judged against it
+    prof = current_profile()
+    st.markdown("**1 · Study protocol**")
+    st.caption(f"Scoring with **{prof['name']}** (v{prof['version']}).")
+    sidebar_protocol()
+    with st.expander("Saved study profiles"):
+        up = st.file_uploader("Load a profile (.json)", type=["json"], key="profile_upload")
+        if up is not None and st.session_state.get("profile_file_id") != up.file_id:
+            st.session_state["profile_file_id"] = up.file_id
+            try:
+                st.session_state["profile"] = P.loads(up.getvalue().decode("utf-8"))
+                st.rerun()
+            except (P.ProfileError, UnicodeDecodeError) as e:
+                st.error(f"Could not load that profile: {e}")
+        if EXAMPLE_PROFILE.exists() and st.button("Use the example oncology profile", width="stretch"):
+            st.session_state["profile"] = P.loads(EXAMPLE_PROFILE.read_text())
+            st.rerun()
+        st.download_button("Download this profile", P.dumps(prof), f"{prof['name']} v{prof['version']}.json",
+                           "application/json", width="stretch")
+        st.caption("Profiles last for this browser session. Download yours to keep it.")
     st.divider()
-    st.markdown("**AI engine** (SCOPE checks and scores whatever it reads)")
+
+    # 2. the AI engine
+    st.markdown("**2 · AI engine**")
     engine = st.selectbox("Who reads the notes", ENGINE_CHOICES, key="byo_provider", label_visibility="collapsed")
     if engine == SHARED:
-        st.caption(f"The app's shared free Gemini quota ({MAX_NEW_CALLS} new notes per session). Bring your own key "
-                   "for more, or to use OpenAI, Claude or another model.")
+        st.caption(f"Free shared engine, {MAX_NEW_CALLS} new notes per session. Bring your own key for more, or to "
+                   "use OpenAI, Claude or another model.")
     else:
         if engine.startswith("Other"):
             st.text_input("Base URL", key="byo_base", placeholder="https://api.mistral.ai/v1")
@@ -523,43 +556,21 @@ with st.sidebar:
         else:
             st.text_input("Model name", key="byo_model", placeholder="as the provider names it")
         st.caption(KEY_HELP[engine])
-    st.caption("Only use fictional or de-identified notes: they are sent to the AI provider you choose.")
     st.divider()
-    prof = current_profile()
-    st.markdown(f"**Study profile:** {prof['name']} (v{prof['version']})")
-    up = st.file_uploader("Load a study profile (.json)", type=["json"], key="profile_upload")
-    if up is not None and st.session_state.get("profile_file_id") != up.file_id:
-        st.session_state["profile_file_id"] = up.file_id
-        try:
-            st.session_state["profile"] = P.loads(up.getvalue().decode("utf-8"))
-            st.rerun()
-        except (P.ProfileError, UnicodeDecodeError) as e:
-            st.error(f"Could not load that profile: {e}")
-    if EXAMPLE_PROFILE.exists() and st.button("Try the example oncology profile", width="stretch"):
-        st.session_state["profile"] = P.loads(EXAMPLE_PROFILE.read_text())
-        st.rerun()
-    st.download_button("Download this profile", P.dumps(prof), f"{prof['name']} v{prof['version']}.json",
-                       "application/json", width="stretch")
-    st.caption("Profiles live in this browser session. Download yours to keep it, and load it next time.")
-    with st.expander("How SCOPE decides"):
-        st.markdown(
-            "1. The LLM reads the note and lists every topic it mentions: an **active** problem, something "
-            "**fixed during the visit**, or **confirmed fine**, each with a quote from the note.\n"
-            "2. SCOPE checks every quote, name, date and action against the note and drops anything that is "
-            "not there.\n"
-            "3. SCOPE scores with the study profile's rubric. The default (SCOPE standard, 22 topics): any "
-            "critical finding or two major findings = high; one major or three minor = medium; otherwise low. A "
-            "repeat finding is raised one level, and so is a problem affecting 3 or more subjects (up to major). "
-            "A study profile can change topics, severities, study rules, escalation and thresholds.\n"
-            "4. CRA corrections that a lead CRA approves are shown to the LLM as examples for similar notes, so "
-            "SCOPE adapts to the study without retraining.\n"
-            "5. Safety net: an empty or garbled answer from the LLM is asked again and never scored, and if the note "
-            "mentions a possible SAE, consent problem, dosing error or IRB lapse that the LLM did not report, SCOPE "
-            "shows a red safety alert.")
+
+    # 3. example notes
+    st.markdown("**3 · Try an example note**")
+    st.selectbox("Example notes", list(examples()), index=None, placeholder="Choose an example...",
+                 key="example_pick", on_change=load_example_note, label_visibility="collapsed")
+    st.caption("All notes, sites and people in this app are fictional. Only use fictional or de-identified notes: "
+               "they are sent to the AI provider you choose.")
+    with st.expander("How it works (TL;DR)"):
+        st.markdown("An AI model reads the note. SCOPE keeps only findings it can match word for word in the note, "
+                    "scores them with your study's rules, and flags anything it is unsure about for you to check.")
 
 parser = get_parser()
 tab_one, tab_batch, tab_check, tab_prof = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check",
-                                                   "Study profile"])
+                                                   "Study setup"])
 
 with tab_one:
     note = st.text_area("Site-visit note", key="note", height=230,
@@ -722,7 +733,8 @@ with tab_batch:
 
 with tab_check:
     st.markdown(
-        "Does SCOPE agree with an experienced CRA? Run it on notes that a CRA has already labelled (risk level and "
+        "Does SCOPE agree with expert judgement? Run it on notes that already have expert labels (risk "
+        "level and "
         "active issues) and compare. None of these notes are in SCOPE's instructions, so it has not seen the answers. "
         "The stress-test notes were written to cover many styles, all 22 issue types and common traps; the other sets "
         "helped shape the rubric.")
@@ -774,32 +786,32 @@ with tab_check:
             for r, rec in zip(rows, recs):
                 if rec is None:
                     table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
-                                  "CRA risk": r["risk"], "SCOPE risk": "not read", "Risk agrees": "-",
-                                  "CRA issues": names(r["issues"]), "SCOPE issues": "-", "Issues agree": "-",
+                                  "Expert risk": r["risk"], "SCOPE risk": "not read", "Risk agrees": "-",
+                                  "Expert issues": names(r["issues"]), "SCOPE issues": "-", "Issues agree": "-",
                                   "Safety alert": ""})
                     continue
                 got = {i["code"] for i in rec["issues"]}
                 risk_only = r.get("risk_only")
                 table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
-                              "CRA risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
+                              "Expert risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
                               "Risk agrees": "yes" if r["risk"] == rec["risk"]["level"] else "NO",
-                              "CRA issues": "-" if risk_only else names(r["issues"]), "SCOPE issues": names(got),
+                              "Expert issues": "-" if risk_only else names(r["issues"]), "SCOPE issues": names(got),
                               "Issues agree": "-" if risk_only else ("yes" if set(r["issues"]) == got else "partly"),
                               "Safety alert": "yes" if rec.get("alerts") else ""})
             df = pd.DataFrame(table)
             n = int((df["SCOPE risk"] != "not read").sum())
-            high = df[df["CRA risk"] == "high"]
+            high = df[df["Expert risk"] == "high"]
             c1, c2, c3 = st.columns(3)
             c1.metric("Risk level agrees", f"{int((df['Risk agrees'] == 'yes').sum())} / {n}")
             c2.metric("High-risk visits caught", f"{int((high['SCOPE risk'] == 'high').sum())} / {len(high)}"
                       if len(high) else "none in set")
-            c3.metric("False alarms (flagged high, CRA said lower)",
-                      int(((df["SCOPE risk"] == "high") & (df["CRA risk"] != "high")).sum()))
+            c3.metric("False alarms (flagged high, expert said lower)",
+                      int(((df["SCOPE risk"] == "high") & (df["Expert risk"] != "high")).sum()))
             st.dataframe(df, hide_index=True, width="stretch")
             for r, rec in zip(rows, recs):
                 if rec is None or r["risk"] == rec["risk"]["level"]:
                     continue
-                with st.expander(f"{r['id']}: CRA said {r['risk']}, SCOPE said {rec['risk']['level']}"):
+                with st.expander(f"{r['id']}: expert said {r['risk']}, SCOPE said {rec['risk']['level']}"):
                     st.text(r["text"])
                     st.dataframe(findings_table(rec, "active"), hide_index=True, width="stretch")
                     st.caption("Who is right? If the label looks wrong to you, tell us; if SCOPE is wrong, this "

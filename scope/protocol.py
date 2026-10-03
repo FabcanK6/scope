@@ -3,7 +3,7 @@
     protocol (PDF / Word / text) ─► pages ─► the sections a monitor needs (safety reporting, AE/SAE definitions,
     visit windows, eligibility, dosing, IP storage, key procedures, consent, deviations)
     ─► LLM drafts rules, each with a word-for-word quote and page ─► SCOPE checks every quote against the protocol
-    ─► a lead CRA accepts the rules ─► they become the study profile's rules, with the protocol cited
+    ─► the study lead accepts the rules ─► they become the study profile's rules, with the protocol cited
 
 Nothing from the protocol is used until a person accepts it. Free-tier LLM requests may be used by the provider, so
 only send protocols that are public (e.g. posted on ClinicalTrials.gov) or fictional.
@@ -56,7 +56,7 @@ PROTOCOL_SCHEMA = {
 
 def system_prompt(profile: dict) -> str:
     topics = "\n".join(f"- {t['code']}: {t['display']}" for t in P.enabled_topics(profile))
-    return f"""You read clinical trial protocols for a clinical research associate (CRA). Extract the study-specific
+    return f"""You read clinical trial protocols for clinical research staff. Extract the study-specific
 rules a monitor needs to judge site visit notes for this study, so that a note is scored against THIS protocol rather
 than general practice.
 

@@ -226,13 +226,13 @@ class GeminiClient(LLMClient):
 # ---------------------------------------------------------------------------
 # Second opinion
 # ---------------------------------------------------------------------------
-# The rubric now lives in study profiles (scope/profile.py); this is the default profile's text (rubric v3.1).
+# The rubric now lives in study profiles (scope/profile.py); this is the default profile's text (rubric v3.2).
 RUBRIC_TEXT = _profile.rubric_text(_profile.default_profile())
 ESCALATION_SUBJECTS = 3  # default profile: a problem affecting this many subjects or more is raised one level
 
 
 def final_severity(f: dict, profile: dict | None = None) -> tuple[str, list[str]]:
-    """Escalation for one finding under a profile (default: rubric v3.1). See ``scope.profile.final_severity``."""
+    """Escalation for one finding under a profile (default: rubric v3.2). See ``scope.profile.final_severity``."""
     return _profile.final_severity(f, profile or _profile.default_profile())
 
 
@@ -269,11 +269,12 @@ def score_findings(findings: list[dict], profile: dict | None = None) -> dict:
 # ---------------------------------------------------------------------------
 # Follow-up letter
 # ---------------------------------------------------------------------------
-LETTER_SYSTEM = """You draft post-visit follow-up letters from a clinical research associate (CRA) to a clinical
-trial site's Principal Investigator. Use a professional, concise tone. Use only the facts provided; where a detail
-is missing (names, dates, protocol number), write a placeholder in square brackets such as [Protocol number].
+LETTER_SYSTEM = """You draft post-visit follow-up letters from the study's monitoring contact to a
+clinical trial site's Principal Investigator. Use a professional, concise tone. Use only the facts provided; where a
+detail is missing (names, dates, protocol number), write a placeholder in square brackets such as [Protocol number].
 Structure: greeting; one-paragraph visit overview; "Findings requiring action" (numbered, each with what is needed
-and the due date if known); "Resolved during the visit"; "Reminders"; closing with the CRA's name placeholder.
+and the due date if known); "Resolved during the visit"; "Reminders"; closing with [Name] and [Title]
+placeholders.
 Never add findings that are not in the facts. Output plain Markdown."""
 
 

@@ -168,7 +168,7 @@ def _dump(answer: dict, profile: dict) -> str:
 def build_system(profile: dict) -> str:
     """The LLM's instructions for one study profile: issue types, rubric, study rules, rules, worked examples."""
     issue_list = "\n".join(f"- {t['code']}: {t['display']} ({t['group']})" for t in _profile.enabled_topics(profile))
-    return f"""You read clinical trial site monitoring visit notes for a clinical research associate (CRA) and turn
+    return f"""You read clinical trial site monitoring visit notes for clinical research staff (whatever their role) and turn
 each note into structured data.
 
 Issue types:
@@ -215,7 +215,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "7.1"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "7.3"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -346,7 +346,7 @@ class LLMParser:
         self.profile = profile or _profile.default_profile()
 
     def system_for(self, text: str) -> str:
-        """Instructions for this note: the profile's rubric plus the approved CRA corrections most like it."""
+        """Instructions for this note: the profile's rubric plus the approved corrections most like it."""
         system = build_system(self.profile)
         learned = _profile.corrections_text(self.profile, text)
         return f"{system}\n\n{learned}" if learned else system

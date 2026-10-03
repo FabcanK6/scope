@@ -7,11 +7,11 @@ A profile holds everything that decides how a visit is scored:
 * ``study_rules``  - plain-language rules from the protocol ("A missed Week 4 PK sample is critical")
 * ``escalation``   - how many subjects make a problem "widespread", how far that raises it, whether repeats escalate
 * ``thresholds``   - the points needed for medium and high risk
-* ``corrections``  - CRA corrections of earlier results; approved ones are shown to the LLM as examples for
+* ``corrections``  - user corrections of earlier results; approved ones are shown to the LLM as examples for
                      similar notes, so SCOPE adapts to the study without retraining
 * ``changes``      - a dated log of edits (who changed what), for the audit trail
 
-The default profile is the CRA-approved rubric v3.1. Profiles are saved and shared as JSON files.
+The default profile is the expert-approved rubric v3.2. Profiles are saved and shared as JSON files.
 """
 
 from __future__ import annotations
@@ -25,14 +25,17 @@ import re
 SEVERITIES = ["minor", "major", "critical"]
 SEVERITY_POINTS = {"minor": 1, "major": 3, "critical": 6}
 
-# (code, group, display, minor, major, critical) - rubric v3.1, approved by an experienced CRA on 2026-10-03.
+# (code, group, display, minor, major, critical) - rubric v3.2, approved by an experienced clinical research
+# professional on 2026-10-03
+# (v3.2: PI not assessing AEs is PI oversight; how eligibility questions are answered is PI oversight).
 _V31 = [
     ("SAE_REPORTING", "Patient safety & consent", "Late or missing SAE reporting",
      "SAE form detail wrong, corrected",
      "SAE follow-up report overdue; PI causality not documented",
      "SAE unreported, or reported outside 24 hours (stays critical even with a CAPA)"),
     ("AE_REPORTING", "Patient safety & consent", "Adverse event recording",
-     "one AE entered late", "AEs missing from EDC; grading or causality not assessed by the PI", ""),
+     "one AE entered late", "AEs missing from EDC or not graded. (The PI not assessing AEs is PI_OVERSIGHT, a "
+     "separate problem.)", ""),
     ("CONSENT", "Patient safety & consent", "Informed consent",
      "missing time of signature; initials missing on a page",
      "outdated ICF version used (major even if the subject was re-consented during the visit); re-consent overdue",
@@ -40,7 +43,8 @@ _V31 = [
     ("ELIGIBILITY", "Patient safety & consent", "Eligibility",
      "eligibility checklist unsigned but criteria met",
      "eligibility evidence missing from source at randomization",
-     "ineligible subject randomized or dosed"),
+     "ineligible subject randomized or dosed. Only report eligibility when a subject's eligibility is actually in "
+     "doubt or undocumented; how eligibility questions get answered (e.g. by email from an absent PI) is PI_OVERSIGHT"),
     ("SAFETY_REPORTS", "Patient safety & consent", "Safety reports to IRB and PI",
      "IND safety reports filed late in the ISF",
      "safety reports not reviewed by the PI or not sent to the IRB", ""),
@@ -85,8 +89,9 @@ _V31 = [
      "staff already performing study procedures or running visits without delegation or training"),
     ("PI_OVERSIGHT", "Site operations", "PI oversight",
      "one late sign-off",
-     "PI not signing labs or eCRFs (a backlog or a long delay); PI unavailable to the team. A routine request for the "
-     "PI to sign items before the next contact is an action item, not a finding", ""),
+     "PI not signing labs or eCRFs (a backlog or a long delay); PI not assessing AEs (causality or grade); PI "
+     "unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, "
+     "not a finding", ""),
     ("ENROLLMENT_LAG", "Site operations", "Enrollment",
      "slightly behind target", "far behind target", ""),
     ("REG_DOCS", "Site operations", "Regulatory and essential documents",
@@ -108,8 +113,8 @@ GROUPS = ["Patient safety & consent", "Protocol & drug", "Data quality", "Site o
 def default_profile() -> dict:
     return {
         "name": "SCOPE standard",
-        "version": "3.1",
-        "description": "Severity rubric v3.1, written and approved by an experienced CRA.",
+        "version": "3.2",
+        "description": "Severity rubric v3.2, written and approved by an experienced clinical research professional.",
         "topics": [{"code": c, "group": g, "display": d, "minor": mi, "major": ma, "critical": cr, "enabled": True}
                    for c, g, d, mi, ma, cr in _V31],
         "study_rules": [],
@@ -285,11 +290,11 @@ def rubric_text(profile: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# corrections: CRA feedback that SCOPE learns from
+# corrections: user feedback that SCOPE learns from
 # ---------------------------------------------------------------------------
 def add_correction(profile: dict, *, note: str, issue: str, status: str, severity: str | None, quote: str,
                    reason: str, scope_said: str = "", cra_risk: str | None = None, who: str = "") -> dict:
-    """Record a CRA correction. It is used only after a lead CRA approves it (``approved``)."""
+    """Record a user correction. It is used only after the study lead approves it (``approved``)."""
     c = {"date": _dt.date.today().isoformat(), "by": who, "issue": issue, "status": status,
          "severity": severity if status == "active" else None, "quote": quote.strip(), "reason": reason.strip(),
          "scope_said": scope_said, "cra_risk": cra_risk, "note": note, "approved": False}
@@ -317,7 +322,8 @@ def corrections_text(profile: dict, note: str) -> str:
     if not cs:
         return ""
     names = topic_map(profile)
-    lines = ["Corrections from CRAs on this study's earlier notes (follow them when a note says something similar):"]
+    lines = ["Corrections from reviewers on this study's earlier notes "
+             "(follow them when a note says something similar):"]
     for c in cs:
         topic = names.get(c["issue"], {}).get("display", c["issue"])
         verdict = (f"active, {c['severity']}" if c["status"] == "active" else
