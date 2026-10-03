@@ -20,10 +20,13 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from scope import profile as P  # noqa: E402
+from scope import protocol as PR  # noqa: E402
+from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
-from scope.data.handwritten import load_handwritten, load_realistic  # noqa: E402
+from scope.data.handwritten import load_handwritten, load_realistic, load_stress  # noqa: E402
 from scope.engine import ENGINE_REV, SYSTEM, LLMParser, Unreadable  # noqa: E402
-from scope.llm import GeminiClient, LLMError, draft_followup, get_api_key  # noqa: E402
+from scope.llm import LLMError, draft_followup, get_api_key, verify_quote  # noqa: E402
 from scope.record import audit_summary, to_row  # noqa: E402
 from scope.schema import ISSUE_BY_CODE, ISSUE_GROUPS  # noqa: E402
 
@@ -49,18 +52,58 @@ def _secret(name: str):
         return None
 
 
+SHARED = "App's free engine (Gemini)"
+ENGINE_CHOICES = [SHARED, *PV.PROVIDERS]
+KEY_HELP = {
+    "Google Gemini": "Free key from aistudio.google.com.",
+    "OpenAI": "Key from platform.openai.com (API keys). Usage is billed to your OpenAI account.",
+    "Anthropic Claude": "Key from console.anthropic.com (API keys). Usage is billed to your Anthropic account.",
+    "Other (OpenAI-compatible)": "Any service with an OpenAI-style API: Azure OpenAI, Mistral, Groq, OpenRouter, or a "
+                                 "local Ollama or vLLM server (leave the key empty if it needs none).",
+}
+
+
+def engine_settings() -> dict:
+    """Which LLM reads the notes: the app's shared Gemini key, or the visitor's own key for any provider."""
+    choice = st.session_state.get("byo_provider", SHARED)
+    if choice == SHARED:
+        key = get_api_key(st.secrets if _secret("GEMINI_API_KEY") else None)
+        return {"shared": True, "provider": "Google Gemini", "key": key, "model": _secret("GEMINI_MODEL"),
+                "base": None}
+    return {"shared": False, "provider": choice, "key": (st.session_state.get("byo_key") or "").strip(),
+            "model": st.session_state.get("byo_model") or None, "base": st.session_state.get("byo_base") or None}
+
+
 def api_key() -> str | None:
-    return st.session_state.get("byo_key") or get_api_key(st.secrets if _secret("GEMINI_API_KEY") else None)
+    """A fingerprint of the engine in use (provider, key, model, base URL) for the answer cache."""
+    e = engine_settings()
+    if not e["key"] and not (e["provider"].startswith("Other") and e["base"]):
+        return None
+    return f"{e['provider']}|{e['key']}|{e['model']}|{e['base']}"
+
+
+def current_profile() -> dict:
+    """The study profile in use in this browser session (default: SCOPE standard, rubric v3.1)."""
+    if "profile" not in st.session_state:
+        st.session_state["profile"] = P.default_profile()
+    return st.session_state["profile"]
 
 
 def get_parser() -> LLMParser | None:
-    key = api_key()
-    if not key:
+    sig = api_key()
+    if not sig:
         return None
     parser = st.session_state.get("parser")
-    if parser is None or parser.client.api_key != key:
-        parser = LLMParser(GeminiClient(key, model=_secret("GEMINI_MODEL")))
-        st.session_state["parser"] = parser
+    if parser is None or st.session_state.get("parser_sig") != sig:
+        e = engine_settings()
+        try:
+            client = PV.make_client(e["provider"], e["key"], model=e["model"], base_url=e["base"])
+        except LLMError as err:
+            st.sidebar.error(str(err))
+            return None
+        parser = LLMParser(client)
+        st.session_state["parser"], st.session_state["parser_sig"] = parser, sig
+    parser.profile = current_profile()
     return parser
 
 
@@ -72,7 +115,8 @@ def shared_cache() -> dict:
 
 def _cache_key(kind: str, text: str) -> str:
     fp = hashlib.sha256((api_key() or "").encode()).hexdigest()[:12]
-    return f"{kind}:{ENGINE_VERSION}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
+    prof = P.fingerprint(current_profile())
+    return f"{kind}:{ENGINE_VERSION}:{prof}:{fp}:{hashlib.sha256(text.encode()).hexdigest()}"
 
 
 def cached_llm(kind: str, text: str, fn):
@@ -81,7 +125,7 @@ def cached_llm(kind: str, text: str, fn):
     if hit and time.time() - hit[0] < 24 * 3600:
         return hit[1]
     used = st.session_state.get("llm_calls", 0)
-    if used >= MAX_NEW_CALLS:
+    if used >= MAX_NEW_CALLS and engine_settings()["shared"]:  # own keys are not capped
         raise LLMError(f"This session has used its {MAX_NEW_CALLS} new LLM requests. Reload the page later.")
     value = fn()  # failed requests (busy, quota) don't count against the session
     st.session_state["llm_calls"] = used + 1
@@ -170,6 +214,276 @@ def findings_table(rec: dict, status: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def correction_form(note: str, rec: dict) -> None:
+    """Let a CRA correct SCOPE. Corrections are proposed; a lead CRA approves them in the Study profile tab."""
+    prof = current_profile()
+    topics = P.enabled_topics(prof)
+    found = [f for f in rec.get("findings", []) if f.get("verified")]
+    with st.expander("Disagree with SCOPE? Correct it"):
+        st.caption("Your correction is saved to the study profile as a proposal. Once a lead CRA approves it, SCOPE "
+                   "shows it to the LLM as an example whenever it reads a similar note.")
+        with st.form(f"correct_{hashlib.sha256(note.encode()).hexdigest()[:8]}", clear_on_submit=True):
+            options = [f"{f['display']} ({f['status'].replace('_', ' ')}"
+                       f"{', ' + f.get('final_severity', f['severity']) if f['status'] == 'active' else ''})"
+                       for f in found] + ["Something SCOPE missed"]
+            pick = st.selectbox("Which finding?", options)
+            idx = options.index(pick)
+            chosen = found[idx] if idx < len(found) else None
+            topic_names = [t["display"] for t in topics]
+            default_topic = topic_names.index(chosen["display"]) if chosen and chosen["display"] in topic_names else 0
+            topic = st.selectbox("Topic", topic_names, index=default_topic)
+            status = st.radio("It should be", ["active problem", "fixed during the visit", "not a problem"],
+                              horizontal=True)
+            severity = st.select_slider("Severity (if active)", ["minor", "major", "critical"],
+                                        value=chosen.get("severity", "minor") if chosen else "minor")
+            quote = st.text_input("Words from the note that show it", value=chosen["evidence"] if chosen else "")
+            reason = st.text_input("Why (one line)")
+            cra_risk = st.selectbox("What should this visit's risk be? (optional)", ["", "low", "medium", "high"])
+            who = st.text_input("Your name or initials (optional)")
+            if st.form_submit_button("Save correction"):
+                if not quote.strip() or not verify_quote(quote, note):
+                    st.error("The quote must be words copied from the note.")
+                    return
+                code = next(t["code"] for t in topics if t["display"] == topic)
+                stat = {"active problem": "active", "fixed during the visit": "resolved_on_site",
+                        "not a problem": "no_issue"}[status]
+                scope_said = (f"{chosen['status']}, {chosen.get('final_severity', chosen['severity'])}"
+                              if chosen else "missed")
+                P.add_correction(prof, note=note, issue=code, status=stat, severity=severity, quote=quote,
+                                 reason=reason, scope_said=scope_said, cra_risk=cra_risk or None, who=who)
+                st.success("Correction saved as a proposal. Approve it in the Study profile tab, then download the "
+                           "profile to keep it.")
+
+
+def _profile_diff(old: dict, new: dict) -> str:
+    """One line describing what changed between two profiles (for the change log)."""
+    parts = []
+    o, n = P.topic_map(old), P.topic_map(new)
+    added = [n[c]["display"] for c in n if c not in o]
+    removed = [o[c]["display"] for c in o if c not in n]
+    toggled = [n[c]["display"] for c in n if c in o and n[c]["enabled"] != o[c]["enabled"]]
+    edited = [n[c]["display"] for c in n if c in o and any(n[c][k] != o[c][k] for k in P.SEVERITIES + ["display"])]
+    for label, items in (("added", added), ("removed", removed), ("switched on/off", toggled), ("edited", edited)):
+        if items:
+            parts.append(f"topics {label}: {', '.join(items)}")
+    if old["study_rules"] != new["study_rules"]:
+        parts.append(f"study rules now {len(new['study_rules'])}")
+    if old["escalation"] != new["escalation"]:
+        parts.append("escalation settings changed")
+    if old["thresholds"] != new["thresholds"]:
+        parts.append(f"risk thresholds medium {new['thresholds']['medium']}, high {new['thresholds']['high']}")
+    oa = sum(bool(c.get("approved")) for c in old["corrections"])
+    na = sum(bool(c.get("approved")) for c in new["corrections"])
+    if (oa, len(old["corrections"])) != (na, len(new["corrections"])):
+        parts.append(f"corrections: {na} approved of {len(new['corrections'])}")
+    if old["name"] != new["name"]:
+        parts.append(f"renamed to {new['name']}")
+    return "; ".join(parts)
+
+
+EXAMPLE_PROTOCOL = ROOT / "profiles" / "example_protocol_ZLV-301.pdf"
+EXAMPLE_PROFILE = ROOT / "profiles" / "example_oncology_study.json"
+
+
+def protocol_builder() -> None:
+    """Upload a protocol, let the LLM draft its study rules (quotes checked), and let a lead CRA accept them."""
+    st.subheader("Build a profile from a protocol")
+    st.markdown(
+        "SCOPE reads the protocol and drafts the rules that change how visits should be judged: what counts as an "
+        "SAE and its reporting deadline, visit windows, key eligibility criteria, dosing and storage rules, and what "
+        "the protocol calls an important deviation. Every rule comes with the exact quote and page, checked against "
+        "the protocol. Nothing is used until you accept it.")
+    st.warning("Free-tier requests may be used by the AI provider. Only upload protocols that are public (for "
+               "example from ClinicalTrials.gov) or fictional. Never upload a confidential sponsor protocol here.")
+    presets = {"SCOPE standard (rubric v3.1)": "standard", "The current profile": "current"}
+    if EXAMPLE_PROFILE.exists():
+        presets["Example oncology profile"] = "example"
+    c1, c2 = st.columns([1, 1])
+    base_choice = c1.selectbox("Start from", list(presets), key="pr_base")
+    upload = c2.file_uploader("Protocol (PDF, Word or text)", type=["pdf", "docx", "txt"], key="pr_file")
+    use_example = EXAMPLE_PROTOCOL.exists() and st.button("Use the example protocol (ZLV-301, fictional)")
+    source = None
+    if upload is not None:
+        source = (upload.name, upload.getvalue())
+    elif use_example:
+        source = (EXAMPLE_PROTOCOL.name, EXAMPLE_PROTOCOL.read_bytes())
+    if source and (use_example or st.button("Read the protocol", type="primary")):
+        if not parser:
+            st.info("Add a Gemini API key in the sidebar first.")
+            return
+        base = {"standard": P.default_profile, "current": current_profile,
+                "example": lambda: P.loads(EXAMPLE_PROFILE.read_text())}[presets[base_choice]]()
+        try:
+            pages = PR.read_document(*source)
+            key = f"{PR.fingerprint(source[1])}:{P.fingerprint(base)}"
+            with st.spinner("Reading the protocol..."):
+                draft = cached_llm("protocol", key, lambda: PR.draft_rules(parser.client, pages, base))
+            st.session_state["protocol_draft"] = {"file": source[0], "draft": draft, "base": base}
+        except LLMError as e:
+            show_llm_error(e)
+    pd_state = st.session_state.get("protocol_draft")
+    if not pd_state:
+        return
+    draft, base = pd_state["draft"], pd_state["base"]
+    study = draft["study"]
+    st.markdown(f"**{study.get('protocol_number') or pd_state['file']}** "
+                f"{study.get('version') or ''} · {study.get('title') or ''}  \n"
+                f"Phase {study.get('phase') or '?'} · {study.get('therapeutic_area') or 'therapeutic area not stated'}")
+    st.caption(PR.page_count_note(draft) + (f" {draft['dropped']} drafted rule(s) were dropped because their quote "
+                                            "is not in the protocol." if draft["dropped"] else ""))
+    if not draft["rules"]:
+        st.info("No study-specific rules were found.")
+        return
+    names = {t["code"]: t["display"] for t in base["topics"]}
+    df = pd.DataFrame([{"Accept": True, "Topic": names.get(r["topic"], "Whole study"), "Rule": r["rule"],
+                        "If broken": r["severity"], "Quote from the protocol": r["quote"], "Page": r["page"]}
+                       for r in draft["rules"]])
+    edited = st.data_editor(df, key="pr_rules", hide_index=True, width="stretch",
+                            disabled=["Topic", "Quote from the protocol", "Page"],
+                            column_config={"Accept": st.column_config.CheckboxColumn(width="small"),
+                                           "If broken": st.column_config.SelectboxColumn(
+                                               options=PR.SEVERITY_OPTIONS)})
+    st.caption("You can reword a rule or change what breaking it counts as before accepting. 'definition' means the "
+               "rule changes what counts (for example, 'disease progression is not an SAE').")
+    c1, c2 = st.columns([2, 1])
+    default_name = f"{study.get('protocol_number') or pd_state['file']} study profile"
+    name = c1.text_input("Name for the new profile", default_name, key="pr_name")
+    who = c2.text_input("Your name or initials", key="pr_who")
+    if st.button("Create the study profile from the accepted rules", type="primary"):
+        rules = [{**r, "rule": str(row["Rule"]).strip() or r["rule"], "severity": row["If broken"]}
+                 for r, (_, row) in zip(draft["rules"], edited.iterrows())]
+        accepted = [i for i, (_, row) in enumerate(edited.iterrows()) if bool(row["Accept"])]
+        if not accepted:
+            st.error("Accept at least one rule.")
+            return
+        new = PR.apply_rules(base, {**draft, "rules": rules}, accepted, pd_state["file"], who=who.strip(),
+                             new_name=name.strip() or None)
+        st.session_state["profile"] = new
+        st.session_state.pop("protocol_draft", None)
+        st.success(f"Created {new['name']} v{new['version']} with {len(accepted)} protocol rules. Every visit is now "
+                   "scored against this protocol. Download the profile to keep it.")
+        st.rerun()
+
+
+def profile_editor() -> None:
+    prof = current_profile()
+    st.markdown(
+        "A study profile is SCOPE's rubric for one study. Start from **SCOPE standard** (rubric v3.1, written by an "
+        "experienced CRA), then adjust it to the protocol: change what counts as minor, major or critical, add "
+        "study-specific topics and rules, tune escalation, and approve CRA corrections so SCOPE learns from them.")
+    st.info("Changes last for this browser session. Use **Download this profile** in the sidebar to keep them, and "
+            "load the file next time. Every result shows which profile and version scored it.")
+    protocol_builder()
+    st.divider()
+    st.subheader("This profile")
+    if prof.get("protocol"):
+        pr = prof["protocol"]
+        st.caption(f"Built from protocol {pr.get('reference')} ({pr.get('file')}): {len(pr.get('rules', []))} rules, "
+                   "cited in the study rules below.")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    name = c1.text_input("Profile name", prof["name"], key="pf_name")
+    c2.metric("Version", prof["version"])
+    c3.metric("Fingerprint", P.fingerprint(prof))
+
+    st.subheader("Topics and severities")
+    st.caption("Edit the text that defines each severity, switch topics off that do not apply, or add a row for a "
+               "study-specific topic. Leave a severity empty if it does not exist for that topic.")
+    topics_df = pd.DataFrame([{"On": t["enabled"], "Topic": t["display"], "Group": t["group"], "Minor": t["minor"],
+                               "Major": t["major"], "Critical": t["critical"], "Code": t["code"]}
+                              for t in prof["topics"]])
+    edited_topics = st.data_editor(
+        topics_df, key="pf_topics", num_rows="dynamic", hide_index=True, width="stretch",
+        column_config={"On": st.column_config.CheckboxColumn(width="small"),
+                       "Code": st.column_config.TextColumn(disabled=True, help="Set automatically for new topics"),
+                       "Group": st.column_config.SelectboxColumn(options=P.GROUPS + ["Study-specific"])})
+
+    st.subheader("Study-specific rules")
+    rules = st.text_area("One rule per line. These come from the protocol and override the rubric.",
+                         "\n".join(prof["study_rules"]), key="pf_rules", height=110,
+                         placeholder="A missed Week 4 PK sample is critical (protocol deviation).\n"
+                                     "Visit windows are plus or minus 7 days; up to 7 days late is not a deviation.")
+
+    st.subheader("Escalation and risk thresholds")
+    e1, e2, e3, e4, e5 = st.columns(5)
+    esc, th = prof["escalation"], prof["thresholds"]
+    n_subj = e1.number_input("Subjects that make a problem widespread", 2, 50, esc["subjects_threshold"],
+                             key="pf_subj")
+    cap = e2.selectbox("Widespread raises it up to", P.SEVERITIES, P.SEVERITIES.index(esc["subjects_max"]),
+                       key="pf_cap")
+    rep_on = e3.checkbox("Repeat findings go up one level", esc["repeat"], key="pf_repeat")
+    med = e4.number_input("Points for medium risk", 1, 30, th["medium"], key="pf_med")
+    high = e5.number_input("Points for high risk", 2, 60, th["high"], key="pf_high")
+    st.caption("Points: minor 1, major 3, critical 6, worst finding per topic.")
+
+    st.subheader("CRA corrections")
+    edited_corr = None
+    if prof["corrections"]:
+        st.caption("Tick **Approved** to let SCOPE learn from a correction. Delete a row to drop it.")
+        names = {t["code"]: t["display"] for t in prof["topics"]}
+        corr_df = pd.DataFrame([{
+            "Approved": bool(c.get("approved")), "Date": c.get("date", ""), "By": c.get("by", ""),
+            "Topic": names.get(c["issue"], c["issue"]),
+            "Should be": (f"active, {c['severity']}" if c["status"] == "active" else c["status"].replace("_", " ")),
+            "SCOPE said": c.get("scope_said", ""), "Quote": c["quote"], "Reason": c.get("reason", ""),
+            "Visit risk": c.get("cra_risk") or ""} for c in prof["corrections"]])
+        edited_corr = st.data_editor(
+            corr_df, key="pf_corr", num_rows="dynamic", hide_index=True, width="stretch",
+            disabled=[c for c in corr_df.columns if c != "Approved"])
+    else:
+        st.caption("No corrections yet. Use **Disagree with SCOPE? Correct it** under any result.")
+
+    who = st.text_input("Your name or initials, for the change log", key="pf_who")
+    b1, b2 = st.columns([1, 1])
+    if b1.button("Save changes", type="primary"):
+        new = json.loads(json.dumps(prof))
+        new["name"] = name.strip() or prof["name"]
+        rows = []
+        for _, r in edited_topics.iterrows():
+            display = str(r.get("Topic") or "").strip()
+            if not display:
+                continue
+            code = str(r.get("Code") or "").strip() if isinstance(r.get("Code"), str) else ""
+            rows.append({"code": code or P.code_for(display), "display": display,
+                         "group": r.get("Group") or "Study-specific", "minor": r.get("Minor") or "",
+                         "major": r.get("Major") or "", "critical": r.get("Critical") or "",
+                         "enabled": bool(r.get("On")) if r.get("On") is not None else True})
+        new["topics"] = rows
+        new["study_rules"] = [x.strip() for x in rules.splitlines() if x.strip()]
+        new["escalation"] = {"subjects_threshold": int(n_subj), "subjects_max": cap, "repeat": bool(rep_on)}
+        new["thresholds"] = {"medium": int(med), "high": int(high)}
+        if edited_corr is not None:
+            kept = []
+            quotes = list(edited_corr["Quote"])
+            approved = dict(zip(edited_corr["Quote"], edited_corr["Approved"]))
+            for c in prof["corrections"]:
+                if c["quote"] in quotes:
+                    kept.append({**c, "approved": bool(approved[c["quote"]])})
+            new["corrections"] = kept
+        try:
+            new = P.validate(new)
+        except P.ProfileError as e:
+            st.error(f"Not saved: {e}")
+            return
+        summary = _profile_diff(prof, new)
+        if not summary:
+            st.info("Nothing changed.")
+            return
+        if new["name"] == P.default_profile()["name"]:
+            new["name"] = "SCOPE standard (customised)"  # the standard itself never changes silently
+        new["version"] = P.bump_version(prof["version"])
+        P.log_change(new, summary, who=who.strip())
+        st.session_state["profile"] = new
+        st.success(f"Saved as version {new['version']}: {summary}. Download the profile to keep it.")
+        st.rerun()
+    if b2.button("Start over from SCOPE standard"):
+        st.session_state["profile"] = P.default_profile()
+        st.rerun()
+
+    if prof["changes"]:
+        st.subheader("Change log")
+        st.dataframe(pd.DataFrame(prof["changes"][::-1]), hide_index=True, width="stretch")
+
+
 # ---------------------------------------------------------------------------
 st.title("🩺 SCOPE")
 st.caption("Site Communication & Oversight Processing Engine · reads free-text site-visit notes and returns a "
@@ -182,28 +496,70 @@ with st.sidebar:
             st.session_state["note"] = text
     st.caption("All notes, sites and people in this app are fictional.")
     st.divider()
-    st.markdown("**Engine:** Google Gemini, checked by SCOPE")
-    if _secret("GEMINI_API_KEY") and not st.session_state.get("byo_key"):
-        st.caption("Using the app's shared free quota.")
-    st.text_input("Your own Gemini API key (optional)", type="password", key="byo_key",
-                  help="Free key from aistudio.google.com. Kept only in this browser session.")
-    st.caption("Notes are sent to Google's Gemini API. Only use fictional or de-identified notes.")
+    st.markdown("**AI engine** (SCOPE checks and scores whatever it reads)")
+    engine = st.selectbox("Who reads the notes", ENGINE_CHOICES, key="byo_provider", label_visibility="collapsed")
+    if engine == SHARED:
+        st.caption(f"The app's shared free Gemini quota ({MAX_NEW_CALLS} new notes per session). Bring your own key "
+                   "for more, or to use OpenAI, Claude or another model.")
+    else:
+        if engine.startswith("Other"):
+            st.text_input("Base URL", key="byo_base", placeholder="https://api.mistral.ai/v1")
+        st.text_input(f"Your {engine.split(' (')[0]} API key", type="password", key="byo_key",
+                      help=KEY_HELP[engine] + " Kept only in this browser session; sent only to that provider.")
+        e = engine_settings()
+        models: list[str] = []
+        if e["key"] or (engine.startswith("Other") and e["base"]):
+            cache_id = hashlib.sha256(f"{engine}|{e['key']}|{e['base']}".encode()).hexdigest()
+            if st.session_state.get("byo_models_for") != cache_id:
+                try:
+                    probe = PV.make_client(engine, e["key"], base_url=e["base"])
+                    st.session_state["byo_models"] = PV.list_models(probe)
+                except LLMError:
+                    st.session_state["byo_models"] = []
+                st.session_state["byo_models_for"] = cache_id
+            models = st.session_state.get("byo_models", [])
+        if models:
+            st.selectbox("Model", models, key="byo_model")
+        else:
+            st.text_input("Model name", key="byo_model", placeholder="as the provider names it")
+        st.caption(KEY_HELP[engine])
+    st.caption("Only use fictional or de-identified notes: they are sent to the AI provider you choose.")
+    st.divider()
+    prof = current_profile()
+    st.markdown(f"**Study profile:** {prof['name']} (v{prof['version']})")
+    up = st.file_uploader("Load a study profile (.json)", type=["json"], key="profile_upload")
+    if up is not None and st.session_state.get("profile_file_id") != up.file_id:
+        st.session_state["profile_file_id"] = up.file_id
+        try:
+            st.session_state["profile"] = P.loads(up.getvalue().decode("utf-8"))
+            st.rerun()
+        except (P.ProfileError, UnicodeDecodeError) as e:
+            st.error(f"Could not load that profile: {e}")
+    if EXAMPLE_PROFILE.exists() and st.button("Try the example oncology profile", width="stretch"):
+        st.session_state["profile"] = P.loads(EXAMPLE_PROFILE.read_text())
+        st.rerun()
+    st.download_button("Download this profile", P.dumps(prof), f"{prof['name']} v{prof['version']}.json",
+                       "application/json", width="stretch")
+    st.caption("Profiles live in this browser session. Download yours to keep it, and load it next time.")
     with st.expander("How SCOPE decides"):
         st.markdown(
             "1. The LLM reads the note and lists every topic it mentions: an **active** problem, something "
             "**fixed during the visit**, or **confirmed fine**, each with a quote from the note.\n"
             "2. SCOPE checks every quote, name, date and action against the note and drops anything that is "
             "not there.\n"
-            "3. SCOPE applies the severity rubric (22 topics): any critical finding or two major findings = "
-            "high; one major or three minor = medium; otherwise low. Late or unreported SAEs, consent after "
-            "procedures and dosing errors are critical. A repeat finding is raised one level, and so is a problem "
-            "affecting 3 or more subjects (up to major); both can apply.\n"
-            "4. Safety net: an empty or garbled answer from the LLM is asked again and never scored, and if the note "
+            "3. SCOPE scores with the study profile's rubric. The default (SCOPE standard, 22 topics): any "
+            "critical finding or two major findings = high; one major or three minor = medium; otherwise low. A "
+            "repeat finding is raised one level, and so is a problem affecting 3 or more subjects (up to major). "
+            "A study profile can change topics, severities, study rules, escalation and thresholds.\n"
+            "4. CRA corrections that a lead CRA approves are shown to the LLM as examples for similar notes, so "
+            "SCOPE adapts to the study without retraining.\n"
+            "5. Safety net: an empty or garbled answer from the LLM is asked again and never scored, and if the note "
             "mentions a possible SAE, consent problem, dosing error or IRB lapse that the LLM did not report, SCOPE "
             "shows a red safety alert.")
 
 parser = get_parser()
-tab_one, tab_batch, tab_check = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check"])
+tab_one, tab_batch, tab_check, tab_prof = st.tabs(["Analyze a note", "Portfolio view", "Accuracy check",
+                                                   "Study profile"])
 
 with tab_one:
     note = st.text_area("Site-visit note", key="note", height=230,
@@ -258,8 +614,12 @@ with tab_one:
                     st.dataframe(pd.DataFrame([{"Issue": f["display"], "Status": f["status"],
                                                 "Claimed quote": f["evidence"]} for f in ignored]),
                                  hide_index=True, width="stretch")
-            st.caption(f"Read by {rec.get('model') or 'Gemini'}; risk computed by SCOPE's rubric from the verified "
-                       "active findings.")
+            prof_used = rec.get("profile") or {}
+            st.caption(f"Read by {rec.get('provider', 'Google Gemini')} {rec.get('model') or ''}; risk computed "
+                       "from the verified active findings "
+                       f"with the study profile {prof_used.get('name', 'SCOPE standard')} "
+                       f"(v{prof_used.get('version', '3.1')}).")
+            correction_form(note, rec)
         with t_note:
             st.markdown(highlight(note, rec), unsafe_allow_html=True)
         with t_act:
@@ -363,15 +723,25 @@ with tab_batch:
 with tab_check:
     st.markdown(
         "Does SCOPE agree with an experienced CRA? Run it on notes that a CRA has already labelled (risk level and "
-        "active issues) and compare. None of these notes are in SCOPE's instructions, so it has not seen the answers.")
+        "active issues) and compare. None of these notes are in SCOPE's instructions, so it has not seen the answers. "
+        "The stress-test notes were written to cover many styles, all 22 issue types and common traps; the other sets "
+        "helped shape the rubric.")
 
     @st.cache_data
     def labelled_sets() -> dict[str, list[dict]]:
         hw = load_handwritten()
-        return {"Formal visit reports (7)": load_realistic(), "Hand-written notes 1-8": hw[:8],
+        st_notes = load_stress()
+        return {"Stress test notes 1-13": st_notes[:13], "Stress test notes 14-25": st_notes[13:25],
+                "Formal visit reports (7)": load_realistic(), "Hand-written notes 1-8": hw[:8],
                 "Hand-written notes 9-16": hw[8:16], "Hand-written notes 17-24": hw[16:24]}
 
-    sets = labelled_sets()
+    sets = dict(labelled_sets())
+    corrected = [c for c in current_profile()["corrections"] if c.get("cra_risk") and c.get("note")]
+    if corrected:
+        unique = list({c["note"]: c for c in corrected}.values())
+        sets[f"Notes corrected in this profile ({len(unique[:10])})"] = [
+            {"id": f"corr-{i + 1}", "text": c["note"], "risk": c["cra_risk"], "issues": [], "risk_only": True}
+            for i, c in enumerate(unique[:10])]
     choice = st.selectbox("Labelled notes", list(sets))
     if not parser:
         st.info("Add a Gemini API key in the sidebar first.")
@@ -394,8 +764,11 @@ with tab_check:
             with st.expander(f"{note_id}: not scored, Gemini's answer was unusable ({e.reason}, {e.model})"):
                 st.code(e.raw[:6000] or "(empty)")
         if any(recs):
+            topic_names = {t["code"]: t["display"] for t in current_profile()["topics"]}
+
             def names(codes):
-                return ", ".join(ISSUE_BY_CODE[c].display for c in sorted(codes)) or "none"
+                return ", ".join(topic_names.get(c) or (ISSUE_BY_CODE[c].display if c in ISSUE_BY_CODE else c)
+                                 for c in sorted(codes)) or "none"
 
             table = []
             for r, rec in zip(rows, recs):
@@ -406,11 +779,12 @@ with tab_check:
                                   "Safety alert": ""})
                     continue
                 got = {i["code"] for i in rec["issues"]}
+                risk_only = r.get("risk_only")
                 table.append({"Note": r["id"], "Starts with": " ".join(r["text"].split())[:70] + "...",
                               "CRA risk": r["risk"], "SCOPE risk": rec["risk"]["level"],
                               "Risk agrees": "yes" if r["risk"] == rec["risk"]["level"] else "NO",
-                              "CRA issues": names(r["issues"]), "SCOPE issues": names(got),
-                              "Issues agree": "yes" if set(r["issues"]) == got else "partly",
+                              "CRA issues": "-" if risk_only else names(r["issues"]), "SCOPE issues": names(got),
+                              "Issues agree": "-" if risk_only else ("yes" if set(r["issues"]) == got else "partly"),
                               "Safety alert": "yes" if rec.get("alerts") else ""})
             df = pd.DataFrame(table)
             n = int((df["SCOPE risk"] != "not read").sum())
@@ -430,3 +804,6 @@ with tab_check:
                     st.dataframe(findings_table(rec, "active"), hide_index=True, width="stretch")
                     st.caption("Who is right? If the label looks wrong to you, tell us; if SCOPE is wrong, this "
                                "is what the next prompt or rubric change should fix.")
+
+with tab_prof:
+    profile_editor()

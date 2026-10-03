@@ -1,12 +1,15 @@
 """Evaluate a parser on one or more test sets.
 
-    GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
+    GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data stress handwritten realistic --sleep 5
+    OPENAI_API_KEY=... python -m scope.evaluate --backend llm --provider openai --llm-model <model> --data stress
+    ANTHROPIC_API_KEY=... python -m scope.evaluate --backend llm --provider anthropic --llm-model <model> --data stress
     python -m scope.evaluate --backend rules
     python -m scope.evaluate --model models/scope-bert --report reports/bert.json
     python -m scope.evaluate --model models/scope-bert --data data/test_unseen.jsonl --errors 5
 
 ``--data`` takes JSONL files and/or the built-in sets ``handwritten`` (24 hand-written
-notes) and ``realistic`` (7 long, formal notes in the style of real CRA reports).
+notes), ``realistic`` (7 long, formal notes in the style of real CRA reports) and ``stress`` (the
+CRA-approved stress-test set for rubric v3.1).
 The default is all four test sets.
 """
 
@@ -17,11 +20,11 @@ import json
 from pathlib import Path
 
 from scope.data.generate import read_jsonl
-from scope.data.handwritten import load_handwritten, load_realistic
+from scope.data.handwritten import load_handwritten, load_realistic, load_stress
 from scope.metrics import evaluate_predictions, format_report, headline
 
 DEFAULT_SETS = ["data/test.jsonl", "data/test_unseen.jsonl", "handwritten", "realistic"]
-BUILTIN_SETS = {"handwritten": load_handwritten, "realistic": load_realistic}
+BUILTIN_SETS = {"handwritten": load_handwritten, "realistic": load_realistic, "stress": load_stress}
 
 
 def load_set(name: str) -> list[dict]:
@@ -52,6 +55,12 @@ def main(argv: list[str] | None = None) -> None:
                     help="llm = the Gemini engine used by the app; auto = plain BERT if a checkpoint exists, "
                          "else rules")
     ap.add_argument("--sleep", type=float, default=4.0, help="seconds between LLM requests (free-tier friendly)")
+    ap.add_argument("--provider", choices=["gemini", "openai", "anthropic", "compatible"], default="gemini",
+                    help="LLM provider for --backend llm (key from GEMINI_API_KEY, OPENAI_API_KEY, ANTHROPIC_API_KEY "
+                         "or LLM_API_KEY)")
+    ap.add_argument("--llm-model", default=None, help="LLM model name for --backend llm")
+    ap.add_argument("--base-url", default=None, help="base URL for --provider compatible")
+    ap.add_argument("--profile", default=None, help="study profile JSON to score with (default: SCOPE standard)")
     ap.add_argument("--limit", type=int, default=None, help="only the first N notes of each set")
     ap.add_argument("--report", default=None, help="write the full metrics to this JSON file")
     ap.add_argument("--errors", type=int, default=0, help="print this many misclassified notes per set")
@@ -62,10 +71,19 @@ def main(argv: list[str] | None = None) -> None:
 
     skip: set[str] = set()
     if args.backend == "llm":
-        from scope.engine import FEW_SHOT_IDS, LLMParser
-        from scope.llm import GeminiClient, get_api_key
+        import os
 
-        parser = LLMParser(GeminiClient(get_api_key() or ""), sleep=args.sleep)
+        from scope import profile as _profile
+        from scope.engine import FEW_SHOT_IDS, LLMParser
+        from scope.providers import make_client
+
+        names = {"gemini": ("Google Gemini", "GEMINI_API_KEY"), "openai": ("OpenAI", "OPENAI_API_KEY"),
+                 "anthropic": ("Anthropic Claude", "ANTHROPIC_API_KEY"),
+                 "compatible": ("Other (OpenAI-compatible)", "LLM_API_KEY")}
+        provider, env = names[args.provider]
+        client = make_client(provider, os.environ.get(env, ""), model=args.llm_model, base_url=args.base_url)
+        prof = _profile.loads(Path(args.profile).read_text()) if args.profile else None
+        parser = LLMParser(client, sleep=args.sleep, profile=prof)
         skip = FEW_SHOT_IDS  # these notes are worked examples inside the prompt
     elif args.backend == "rules":
         parser = RuleBasedParser()

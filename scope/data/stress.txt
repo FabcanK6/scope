@@ -1,0 +1,297 @@
+# SCOPE stress-test set (rubric v3.1).
+#
+# New notes written to test variety: writing styles, visit types, the 22 issue types, escalation rules
+# and traps (problems fixed on site, negations, resolved past items, dates near the visit date).
+# Labels proposed by Claude and reviewed and approved by an experienced CRA. Test-only: none of these
+# notes appear in SCOPE's instructions. All content is fictional.
+# Same format as handwritten.txt (no span markup).
+#
+# Batch 1 (st-001 to st-025): approved 2026-10-03. Each block also records the style and what it tests.
+
+=== st-001
+risk: low
+issues: 
+style: Formal report
+visit: IMV
+label: None
+tests: Clean visit where every topic is mentioned only to confirm it is fine
+---
+Monitor: Grace Okonkwo, CCRA
+Visit Type: Interim Monitoring Visit (IMV)
+Date of Visit: 14-Apr-2026
+Site: 615 - Riverside Oncology
+Summary of activities:
+SDV completed for Subjects 615-007 through 615-011 with no discrepancies. All five subjects signed the current ICF (version 5.0) before any study procedures. No new AEs or SAEs were reported since the last visit. IP accountability reconciled with IRT; returned tablets were counted and documented for every dispensing visit. Temperature logs for the pharmacy refrigerator remained within 2-8 C. The delegation log and training records are current. No action items.
+
+=== st-002
+risk: high
+issues: ELIGIBILITY
+style: Bullet notes
+visit: IMV
+label: Eligibility: critical (ineligible subject randomized and dosed)
+tests: New topic: eligibility; critical
+---
+IMV site 228 / 09-Apr-2026 / CRA T. Lindqvist
+- Subj 228-014 randomized 03-Mar with platelet count 82 x10^9/L; protocol requires >=100. Lab result was available before randomization. Subject has received 3 doses.
+- PI notified, deviation logged, medical monitor contacted for continuation decision.
+- Query backlog small (4 open, all <2 wks).
+- F/u: Site to submit the eligibility deviation to the IRB by 16-Apr-2026.
+
+=== st-003
+risk: medium
+issues: STAFF_TURNOVER
+style: E-mail
+visit: IMV
+label: Staff, training and delegation: minor (one GCP certificate expired), raised to major (repeat finding)
+tests: Repeat-finding escalation: minor to major
+---
+Hi Dana, recap from today's on-site visit to site 341 (April 2, 2026). Data is in good shape. The one recurring item: Dr. Patel's GCP certificate expired in January and the renewed certificate is still not in the ISF, which I also flagged at the February visit. Everything else (consents, SAEs, drug accountability) checked out fine. Dr. Patel to complete GCP renewal and file the certificate by April 16, 2026. Best, Omar Haddad
+
+=== st-004
+risk: high
+issues: DOSING_ERROR, DATA_ENTRY_BACKLOG
+style: Dictated
+visit: IMV
+label: Dosing error: critical (double the assigned dose); Data entry backlog: minor (about five pages)
+tests: Run-on dictated style; new topic: dosing error
+---
+ok dictating this in the car after the visit at site 902 on 3/19/2026. so main thing the pharmacist reconstituted the 200 mg vial for subject 902-006 but the subject is on the 100 mg cohort per IWRS so she got double the assigned dose on 3/5, no AEs so far, PI is aware and med monitor was told today. apart from that consents good data entry pretty current maybe five pages behind. pharmacist to complete retraining on cohort verification by 3/26/2026. PI to send the dosing error report to sponsor safety today.
+
+=== st-005
+risk: low
+issues: 
+style: Non-native English
+visit: Remote
+label: None
+tests: Non-native English; staff turnover that was handled correctly
+---
+Remote visit done at 11 March 2026 for site 1207. I have reviewed the eCRF of the 6 subject, all data is entered and only 2 query is open, both are new. ICF of new subject 1207-019 is correct and signed in time. Coordinator inform me that the backup coordinator is in maternity leave until June, but the site has trained a replacement and add her to delegation log already. No SAE. Next visit is planned on May.
+
+=== st-006
+risk: medium
+issues: DATA_ENTRY_BACKLOG
+style: Bullet notes
+visit: IMV
+label: Data entry backlog: minor (con-meds not entered), raised to major (4 subjects)
+tests: Many-subjects escalation: minor to major
+---
+Site 77 IMV 27-Mar-2026 (CRA: B. Adeyemi)
+Concomitant medications: entries missing in EDC for Subjects 077-002, 077-004, 077-005 and 077-009 (all started statins at their GP). Source is clear, data just not transcribed.
+SAE review: none new.
+IP: reconciled.
+Action: CRC to enter the missing con-meds by 03-Apr-2026.
+
+=== st-007
+risk: high
+issues: SOURCE_DOCS, PRIOR_ACTIONS
+style: Formal report
+visit: For-cause
+label: Source documentation: major (source missing for 4 subjects), raised to critical (repeat finding); Follow-up of prior findings: major (CAPA not implemented)
+tests: Both escalation rules on a major finding (spread stays major, repeat raises to critical)
+---
+For-cause visit, Site 455, 12 May 2026. Monitor: Lucia Ferreira.
+Triggered by repeated data quality issues. Source documents for Week 12 visits are missing for Subjects 455-003, 455-006, 455-008 and 455-010: the EDC has vital signs and lab values but there is no clinic note, worksheet or EMR entry to support them. The same problem was found at the March IMV for two other subjects, and the agreed CAPA (contemporaneous worksheets) has not been put in place. Escalated to the study manager and QA.
+Actions: Site to locate or reconstruct source with a note to file by 19 May 2026; PI to implement the worksheet CAPA before the next subject visit.
+
+=== st-008
+risk: low
+issues: 
+style: Shorthand
+visit: Close-out
+label: None
+tests: Clean close-out visit
+---
+COV - Site 1188 - 20/04/2026 - CRA N. Sato
+All 12 subjects completed or withdrawn, all queries closed, final IP reconciliation done and returns shipped to depot on 18/04. ISF reviewed and complete, archiving arrangements confirmed (25 years). Lab certifications on file for the whole study period. Site thanked for strong performance.
+
+=== st-009
+risk: medium
+issues: FACILITY_EQUIPMENT
+style: Formal report
+visit: SIV
+label: Facility and equipment: major (ECG machine out of calibration)
+tests: Pending item at an SIV that the rubric still lists as major (exception to the 'lower severity' rule)
+---
+SIV - Site 3310 - 6 May 2026 - CRA: Hannah Becker
+Attendees: PI Dr. Olsen, 2 Sub-Is, 2 CRCs, pharmacist. Protocol, IP, EDC and safety reporting training completed for all attendees. Pharmacy temperature mapping is done and the -20 C freezer is on continuous monitoring. The site's lab normal ranges are on file. The ECG machine's calibration expired in April; biomedical engineering has it scheduled for 15 May. Site activation is on hold until the calibration certificate is uploaded.
+Action: Site to upload the ECG calibration certificate by 20 May 2026.
+
+=== st-010
+risk: high
+issues: AE_REPORTING, PI_OVERSIGHT
+style: Shorthand
+visit: IMV
+label: Adverse event recording: major (7 AEs missing from EDC, 4 subjects); PI oversight: major (no causality or grade assessment since February)
+tests: New topic: AE recording; judgement call whether PI oversight counts separately
+---
+IMV 2026-04-23, site 518, CRA Mateo Rossi
+Reviewed clinic notes against the AE log for all 9 active subjects. Found 7 AEs (headache, nausea, 2x rash, dizziness, 2x URTI) documented in clinic notes for Subjects 518-001, 518-003, 518-004 and 518-007 that were never entered in EDC. None meet SAE criteria. PI has not assessed causality or grade for any AE since February.
+PI to review and assess all AEs by 30-Apr-2026. CRC to enter the AEs in EDC by 30-Apr-2026.
+
+=== st-011
+risk: low
+issues: 
+style: Formal report
+visit: IMV
+label: None
+tests: Several dates near the visit date; a problem fixed during the visit
+---
+Site 640 - Interim Monitoring Visit - 15 April 2026 - CRA: Ivy Chen
+Prior to the visit (pre-visit letter sent 1 April 2026) the site was asked to file the IRB approval for Amendment 3, dated 2 March 2026; it was filed in the ISF on 10 April 2026. During SDV for 640-012, the Week 6 weight was entered as 82 kg in EDC but 72 kg in source; the coordinator corrected the EDC entry while I was on site and the change was verified. Subject 640-015's Week 8 visit is due 22 April 2026. No AEs, SAEs or deviations since the last visit.
+
+=== st-012
+risk: high
+issues: SITE_ENGAGEMENT, QUERY_AGING
+style: Shorthand
+visit: Remote
+label: Site engagement: major (unresponsive for 4 weeks, 2 cancelled visits); Open or aging queries: major (14 queries older than 30 days)
+tests: New topic: site engagement; query volume rule
+---
+RMV site 2205 31Mar2026 - J. Mwangi
+site has not answered my emails since 2 March (3 follow ups sent), and the last two remote visits were cancelled by the site the day before. 14 queries now older than 30 days. no safety issues seen in EDC.
+Site manager to confirm a named contact and reschedule the visit by 07Apr2026.
+
+=== st-013
+risk: low
+issues: 
+style: Formal report
+visit: IMV
+label: None
+tests: Hospitalization mentioned but handled correctly (safety alert should NOT fire)
+---
+IMV Site 1530, 08-Apr-2026, CRA R. Kowalski. Subject 1530-004 was hospitalized for pneumonia on 21-Mar-2026; the site reported it to safety on 22-Mar-2026, within 24 hours, and the follow-up report is complete with the discharge summary attached. I reconciled the SAE form against source with no discrepancies. All other subjects: no new AEs. SDV up to date.
+
+=== st-014
+risk: high
+issues: UNBLINDING
+style: Narrative
+visit: IMV
+label: Blinding: critical (unplanned unblinding not reported)
+tests: New topic: blinding
+---
+Site 812 IMV 16 April 2026 (CRA: Sven Aalto). The unblinded pharmacist left the randomisation list printout on the shared nurses' station printer on 2 April; a blinded study nurse picked it up and read the treatment codes for Subjects 812-003 to 812-008 before returning it. This was not reported to the sponsor. Pharmacist and nurse retrained today.
+Site to report the unblinding incident to the sponsor and IRB by 17 April 2026.
+
+=== st-015
+risk: medium
+issues: LAB_SAMPLES
+style: Formal report
+visit: IMV
+label: Lab samples and kits: major (PK samples stored at the wrong temperature, compromised; 3 subjects, stays major)
+tests: New topic: lab samples
+---
+Monitoring visit Site 389, 24 March 2026.
+Lab: 6 PK samples from the Week 2 visits (Subjects 389-010 to 389-012) were left in the -20 C freezer instead of -80 C for 9 days before shipment; the central lab flagged them as compromised. Lab kits otherwise well stocked.
+Consent, AE/SAE and IP checks: no issues.
+Action: Lab coordinator to document the deviation and confirm -80 C storage procedure by 31 March 2026.
+
+=== st-016
+risk: low
+issues: DATA_ENTRY_BACKLOG, SOURCE_DOCS
+style: Shorthand
+visit: IMV
+label: Data entry backlog: minor (2 pages); Source documentation: minor (correction not initialed or dated)
+tests: Two minor findings add up to 2 points: still low
+---
+Site 47 IMV 2026-03-30 (CRA P. Nakamura): 2 pages from the Week 10 visit not yet entered, and one correction in the drug dispensing log is not initialed or dated. Coordinator will fix both before the next visit. Everything else is current.
+
+=== st-017
+risk: medium
+issues: PROTOCOL_DEVIATION, STAFF_TURNOVER, LAB_SAMPLES
+style: Bullet notes
+visit: IMV
+label: Protocol deviation: minor (one visit out of window); Staff, training and delegation: minor (unsigned CV); Lab samples and kits: minor (kit supply low)
+tests: Three minor findings add up to 3 points: medium
+---
+Interim visit, site 9021, 10 April 2026, CRA Abebe Tesfaye.
+- 1 subject's Week 4 visit was 4 days outside the window (subject travelling); logged as a minor PD.
+- The sub-investigator's CV on file is unsigned.
+- Only 2 lab kits left; the coordinator will reorder this week.
+- Data entry and queries current.
+
+=== st-018
+risk: high
+issues: SAE_REPORTING, SAFETY_REPORTS
+style: Bullet notes
+visit: IMV
+label: Late or missing SAE reporting: critical (reported 3 days late); Safety reports to IRB and PI: major (5 IND safety reports not reviewed or sent to IRB)
+tests: New topic: safety reports to IRB and PI
+---
+IMV Site 6602 / 22-Apr-2026 / CRA: Elena Petrova
+SAE (subject 6602-011, MI on 30-Mar) was faxed to safety on 2-Apr, 3 days after the site learned of it. In addition, the last 5 IND safety reports from the sponsor have not been reviewed and signed by the PI, and none were submitted to the IRB.
+Actions: PI to review and sign the 5 IND safety reports by 29-Apr-2026; site to submit them to the IRB by 29-Apr-2026; CRC to complete late-SAE CAPA by 6-May-2026.
+
+=== st-019
+risk: low
+issues: 
+style: Narrative
+visit: IMV
+label: None
+tests: Problem words ('late-SAE', 'missing 1572', 'query backlog') that describe resolved past items
+---
+Follow-up IMV at Site 1414 on 2 April 2026 (CRA Maya Levin). All 4 action items from the February visit are closed: delegation log updated, query backlog cleared (0 open > 14 days), missing 1572 filed, and the late-SAE CAPA has been effective (2 SAEs since February, both reported within 24 hours). No new findings.
+
+=== st-020
+risk: medium
+issues: ENROLLMENT_LAG
+style: Shorthand
+visit: Remote
+label: Enrollment: major (1 randomized vs target of 8)
+tests: Enrollment far behind target
+---
+Site 733 RMV 19-Mar-2026. Enrollment: 1 randomized vs target of 8 by end of Q1; 11 pre-screened, 9 failed on the BMI criterion. PI wants to discuss widening referral sources. Data for the one subject is current; no safety issues.
+PI to send an enrollment plan by 2-Apr-2026.
+
+=== st-021
+risk: high
+issues: IP_ACCOUNTABILITY
+style: Narrative
+visit: IMV
+label: IP accountability: critical (expired kit dispensed)
+tests: Expired IP dispensed
+---
+Site 260B on-site IMV 7 May 2026, CRA: Kofi Mensah. During IP accountability I found that kit 77812 (expiry 30 Apr 2026) was dispensed to subject 260-021 on 4 May 2026. The IRT did not block it because the expiry update had not been loaded. Subject has taken 3 doses; no AEs. Remaining expired kits quarantined.
+Pharmacist to notify the sponsor and complete a deviation report by 8 May 2026. PI to assess subject 260-021 at the next visit on 14 May 2026.
+
+=== st-022
+risk: high
+issues: CONSENT
+style: E-mail
+visit: IMV
+label: Informed consent: critical (screening procedures before the ICF was signed)
+tests: Consent timing written with clock times
+---
+Subject: Site 118 visit notes 28 Apr 2026
+Team, quick summary. For subject 118-030, the screening ECG and blood draw were done at 09:10 on 14 April, and the ICF was signed at 11:45 the same day. The coordinator thought the patient had verbally agreed in the waiting room. Everything else looked fine (IP, temp logs, queries). PI to report the consent deviation to the IRB by 5 May 2026 and retrain the CRC. - Paolo Ricci
+
+=== st-023
+risk: low
+issues: 
+style: Shorthand
+visit: IMV
+label: None
+tests: 'Site-wide' used in a positive sentence (must not raise anything)
+---
+Site 5150 IMV 13-Apr-2026 (CRA Aisha Bello). Site-wide, documentation practice has improved a lot since the new coordinator started: all corrections initialed and dated, worksheets contemporaneous. 3 subjects SDV'd with no findings. Next visit in 6 weeks.
+
+=== st-024
+risk: medium
+issues: PI_OVERSIGHT
+style: Narrative
+visit: IMV
+label: PI oversight: major (PI on extended leave, no covering investigator)
+tests: PI unavailable; judgement call whether delegation also counts
+---
+IMV site 3907 - 21 Apr 2026 - CRA Tomasz Wisniewski. PI Dr. Haas has been on extended leave since February and no sub-investigator has been formally designated to cover; the CRC has been getting eligibility questions answered by email from the PI. Data entry current, no SAEs.
+Site to designate a covering investigator and update the delegation log by 28 Apr 2026.
+
+=== st-025
+risk: high
+issues: SOURCE_DOCS
+style: Formal report
+visit: For-cause
+label: Source documentation: critical (back-dated worksheets)
+tests: New topic: source documentation, critical
+---
+For-cause visit Site 4410 on 30 April 2026 (CRA: Rebecca Stone). Audit trail shows the Week 2 and Week 4 visit worksheets for subject 4410-002 were created on 25 April 2026 but signed and dated as if completed on 2 and 16 April. The coordinator admitted filling them in from memory before the visit. Escalated to sponsor QA today.
+QA to decide on next steps; site to provide a written explanation by 7 May 2026.

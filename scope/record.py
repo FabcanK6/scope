@@ -138,7 +138,14 @@ def build_record(text: str, pred: dict) -> dict:
         if visit_date and a["due_date"] and a["due_date"] < visit_date:
             warnings.append(f"Action '{a['action']}' is due before the visit date.")
 
-    issues = [{"code": c, "display": ISSUE_BY_CODE[c].display, "group": ISSUE_BY_CODE[c].group,
+    names = pred.get("topic_names") or {}
+
+    def _name(c):
+        if c in names:
+            return names[c]
+        return (ISSUE_BY_CODE[c].display, ISSUE_BY_CODE[c].group) if c in ISSUE_BY_CODE else (c, "Study-specific")
+
+    issues = [{"code": c, "display": _name(c)[0], "group": _name(c)[1],
                "confidence": round(float(pred.get("issue_probs", {}).get(c, 1.0)), 4),
                "severity": pred.get("severities", {}).get(c)} for c in pred["issues"]]
     risk_probs = pred.get("risk_probs") or {}
@@ -161,8 +168,10 @@ def build_record(text: str, pred: dict) -> dict:
         "points": pred.get("points"),
         "backend": pred.get("backend"),
         "model": pred.get("model"),
+        "provider": pred.get("provider"),
         "llm_output": pred.get("llm_output"),
         "alerts": pred.get("alerts", []),
+        "profile": pred.get("profile"),
     }
 
 

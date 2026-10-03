@@ -15,7 +15,7 @@ jobs:
       - name: Install (CPU torch)
         run: |
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install "transformers>=4.40" numpy scikit-learn pytest ruff
+          pip install "transformers>=4.40" numpy scikit-learn pypdf python-docx pytest ruff
       - name: Lint
         run: ruff check scope tests app scripts
       - name: Unit tests (includes tiny-BERT model tests)

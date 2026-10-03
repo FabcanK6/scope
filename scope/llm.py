@@ -22,7 +22,7 @@ import time
 import urllib.error
 import urllib.request
 
-from scope.schema import SEVERITY_POINTS, risk_from_points
+from scope import profile as _profile
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 DEFAULT_MODEL = os.environ.get("GEMINI_MODEL", "")
@@ -75,11 +75,44 @@ class ModelBusy(LLMError):
 # ---------------------------------------------------------------------------
 # Gemini REST client (standard library only)
 # ---------------------------------------------------------------------------
-class GeminiClient:
+class LLMClient:
+    """What SCOPE needs from any LLM provider: ``generate`` (text, optionally constrained to a JSON schema written in
+    SCOPE's schema dialect) plus a ``model`` name. Provider classes implement ``generate``."""
+
+    provider = "LLM"
+    model: str | None = None
+
+    def __init__(self) -> None:
+        self.avoid: set[str] = set()  # models that just gave a bad answer (used by providers with several models)
+
+    @property
+    def label(self) -> str:
+        return f"{self.provider} {self.model or ''}".strip()
+
+    def generate(self, system: str, prompt: str, schema: dict | None = None) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+    def generate_json(self, system: str, prompt: str, schema: dict) -> dict:
+        raw = self.generate(system, prompt, schema)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            m = re.search(r"\{.*\}", raw, flags=re.S)
+            try:
+                if m:
+                    return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                pass
+            raise BadAnswer("Gemini did not return valid JSON.", raw) from None
+
+
+class GeminiClient(LLMClient):
+    provider = "Google Gemini"
     retry_delays = (2.0, 5.0)  # waits before the 2nd and 3rd attempt on a busy model
     max_models = 6  # how many models to try before giving up
 
     def __init__(self, api_key: str, model: str | None = None, timeout: int = 60):
+        super().__init__()
         if not api_key:
             raise LLMError("No Gemini API key configured.")
         self.api_key = api_key
@@ -88,7 +121,6 @@ class GeminiClient:
         self.timeout = timeout
         self._listed: list[str] | None = None
         self._sleep = time.sleep
-        self.avoid: set[str] = set()  # models that just gave a bad answer: tried last
 
     # -- transport (patched in tests) -------------------------------------
     def _request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -189,100 +221,19 @@ class GeminiClient:
                 self._sleep(delay)
         raise AssertionError("unreachable")
 
-    def generate_json(self, system: str, prompt: str, schema: dict) -> dict:
-        raw = self.generate(system, prompt, schema)
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            m = re.search(r"\{.*\}", raw, flags=re.S)
-            try:
-                if m:
-                    return json.loads(m.group(0))
-            except json.JSONDecodeError:
-                pass
-            raise BadAnswer("Gemini did not return valid JSON.", raw) from None
 
 
 # ---------------------------------------------------------------------------
 # Second opinion
 # ---------------------------------------------------------------------------
-RUBRIC_TEXT = """Severity rubric v3 (approved by an experienced clinical research associate).
-Rate each finding on its own facts; repeats and spread are recorded separately (see the escalation fields)
-and SCOPE applies those itself.
-- SAE_REPORTING. minor: SAE form detail wrong, corrected. major: SAE follow-up report overdue; PI causality not
-  documented. critical: SAE unreported, or reported outside 24 hours (stays critical even with a CAPA).
-- AE_REPORTING. minor: one AE entered late. major: AEs missing from EDC; grading or causality not assessed by the PI.
-- CONSENT. minor: missing time of signature; initials missing on a page. major: outdated ICF version used (major even
-  if the subject was re-consented during the visit); re-consent overdue. critical: study procedures before consent;
-  no signed ICF.
-- ELIGIBILITY. minor: eligibility checklist unsigned but criteria met. major: eligibility evidence missing from source
-  at randomization. critical: ineligible subject randomized or dosed.
-- SAFETY_REPORTS. minor: IND safety reports filed late in the ISF. major: safety reports not reviewed by the PI or not
-  sent to the IRB.
-- UNBLINDING. major: blinded staff could see unblinded documents, no unblinding. critical: unplanned unblinding not
-  reported.
-- PROTOCOL_DEVIATION. minor: a single out-of-window visit or assessment (including one rescheduled outside its
-  window). major: important deviations; safety assessments missed entirely (not just late); deviations not logged.
-- DOSING_ERROR. minor: dosing time not recorded. major: missed doses undocumented; compliance not reconciled
-  (including returned doses not counted).
-  critical: wrong dose, double dose, or dosed despite a hold criterion.
-- IP_ACCOUNTABILITY. minor: small count difference explained on site. major: kits unaccounted for; wrong kit
-  dispensed. critical: expired investigational product dispensed.
-- TEMP_EXCURSION. minor: brief excursion with no product impact, reported; or an excursion that was reported with the
-  product quarantined and not used while the Sponsor decides. major: excursion not reported; logs not kept.
-  critical: product used after an excursion before Sponsor assessment.
-- LAB_SAMPLES. minor: lab kit supplies running low. major: samples mishandled or not shipped; central lab results not
-  reviewed.
-- DATA_ENTRY_BACKLOG. minor: a few pages or one concomitant medication not entered. major: backlog older than 60 days,
-  or a large volume (about 25 or more pages not entered).
-- QUERY_AGING. minor: a few queries open. major: many queries open more than 60 days, or 10 or more queries older
-  than 30 days.
-- SDV_BACKLOG. minor: SDV slightly behind plan. major: SDV far behind; the monitor's EMR access lapsed. critical: the
-  site refuses access to source documents.
-- SOURCE_DOCS. minor: corrections not initialed or dated. major: source missing or contradicts EDC; ALCOA+ failures.
-  critical: falsified or back-dated records.
-- STAFF_TURNOVER (staff, training and delegation). minor: one CV or GCP certificate expired; training still to be
-  completed before the person starts study work. major: staff not on the delegation log who are not yet doing study
-  work; turnover with no backup. critical: staff already performing study procedures or running visits without
-  delegation or training.
-- PI_OVERSIGHT. minor: one late sign-off. major: PI not signing labs or eCRFs (a backlog or a long delay); PI
-  unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, not
-  a finding.
-- ENROLLMENT_LAG. minor: slightly behind target. major: far behind target.
-- REG_DOCS. minor: one document misfiled. major: missing 1572, amendment approval or licenses; a pending IRB approval
-  that blocks screening. critical: enrolling after IRB approval lapsed.
-- FACILITY_EQUIPMENT. minor: calibration due soon. major: equipment out of calibration; lab certification (CLIA/CAP)
-  expired.
-- PRIOR_ACTIONS (follow-up of prior findings). minor: one prior action slightly overdue. major: prior actions not done;
-  CAPA not implemented.
-- SITE_ENGAGEMENT. minor: slow replies to the monitor. major: unresponsive for weeks; repeated visit cancellations.
-Status: "active" = a problem that still exists after the visit. "resolved_on_site" = it was corrected and verified
-during the visit. "no_issue" = the topic is mentioned only to confirm it is fine. Critical findings stay "active" even
-when a CAPA is in place.
-Escalation fields (facts only, SCOPE does the scoring): "repeat" = true only when the note says this problem was also
-found at an earlier visit or an earlier action on it is still open. "subjects_affected" = how many subjects the note
-says the problem affects (null if not stated). "site_wide" = true when the note describes it as site-wide or
-systemic. "escalation_evidence" = the words from the note that show the repeat or the spread ("" if neither)."""
-
-ESCALATION_SUBJECTS = 3  # a problem affecting this many subjects or more is raised one level (up to major)
+# The rubric now lives in study profiles (scope/profile.py); this is the default profile's text (rubric v3.1).
+RUBRIC_TEXT = _profile.rubric_text(_profile.default_profile())
+ESCALATION_SUBJECTS = 3  # default profile: a problem affecting this many subjects or more is raised one level
 
 
-def final_severity(f: dict) -> tuple[str, list[str]]:
-    """Rubric v3 escalation: many subjects (3+ or site-wide) raises one level up to major; a repeat finding raises
-    one level. Both can apply. Only counted when the escalation evidence is really in the note (``escalation_ok``)."""
-    level = SEVERITIES.index(f["severity"])
-    reasons = []
-    if f.get("escalation_ok"):
-        n = f.get("subjects_affected")
-        if (isinstance(n, int) and n >= ESCALATION_SUBJECTS) or f.get("site_wide"):
-            if level < SEVERITIES.index("major"):
-                level += 1
-                reasons.append(f"{n} subjects affected" if isinstance(n, int) and n >= ESCALATION_SUBJECTS
-                               else "site-wide")
-        if f.get("repeat") and level < len(SEVERITIES) - 1:
-            level += 1
-            reasons.append("repeat finding")
-    return SEVERITIES[level], reasons
+def final_severity(f: dict, profile: dict | None = None) -> tuple[str, list[str]]:
+    """Escalation for one finding under a profile (default: rubric v3.1). See ``scope.profile.final_severity``."""
+    return _profile.final_severity(f, profile or _profile.default_profile())
 
 
 def _message(detail: str) -> str:
@@ -310,17 +261,9 @@ def verify_quote(quote: str, note: str) -> bool:
     return any(difflib.SequenceMatcher(None, q, _norm(s).strip(" .")).ratio() >= 0.9 for s in sentences if s.strip())
 
 
-def score_findings(findings: list[dict]) -> dict:
-    """Apply SCOPE's rubric to verified, active findings (highest final severity per issue type)."""
-    worst: dict[str, str] = {}
-    for f in findings:
-        if f["status"] != "active" or not f.get("verified"):
-            continue
-        sev = f.get("final_severity", f["severity"])
-        if f["issue"] not in worst or SEVERITY_POINTS[sev] > SEVERITY_POINTS[worst[f["issue"]]]:
-            worst[f["issue"]] = sev
-    points = sum(SEVERITY_POINTS[s] for s in worst.values())
-    return {"risk": risk_from_points(points), "points": points, "active": worst}
+def score_findings(findings: list[dict], profile: dict | None = None) -> dict:
+    """Apply a profile's rubric to verified, active findings (highest final severity per issue type)."""
+    return _profile.score(findings, profile or _profile.default_profile())
 
 
 # ---------------------------------------------------------------------------
@@ -334,7 +277,7 @@ and the due date if known); "Resolved during the visit"; "Reminders"; closing wi
 Never add findings that are not in the facts. Output plain Markdown."""
 
 
-def draft_followup(client: GeminiClient, record: dict) -> str:
+def draft_followup(client: LLMClient, record: dict) -> str:
     v = record["visit"]
     facts = {
         "visit_type": v["visit_type"]["name"], "visit_date": v["visit_date"]["iso"] or v["visit_date"]["text"],

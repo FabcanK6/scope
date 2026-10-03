@@ -43,6 +43,18 @@ note ─► LLM (Google Gemini): instructions + severity rubric + three worked e
 
 The first version used a fine-tuned BERT model (results below). It was near-perfect on generated notes and caught 7 of 8 high-risk hand-written notes, but a real-style formal report broke it: a routine visit where consent, SDV, drug accountability and storage were all confirmed fine, and one data-entry gap was fixed on site, came back as **high risk at 100% confidence**. The model had learned that mentioning a topic usually means a problem. Real reports mention every topic, mostly to say it is fine, and judging that is reading comprehension, which is what large language models do well. The fine-tuned model and its training pipeline stay in the repository as the baseline.
 
+### Protocol first: build a study profile from the protocol
+
+Protocols disagree on the things that decide risk: one defines an event as an SAE and wants it reported within 2 business days, another allows 3 calendar days, a third says the same event is only an AE (or that disease progression or a pre-planned hospitalization is not an SAE at all). So SCOPE reads the protocol first:
+
+1. Upload the protocol (PDF, Word or text) in the Study profile tab and choose a starting preset.
+2. The LLM drafts the study-specific rules a monitor needs: SAE definitions, exceptions and reporting deadlines, other expedited reporting, visit windows, key assessments, eligibility, dosing hold and stop rules, storage and excursion handling, consent, and the protocol's list of important deviations. Long protocols are cut to the pages that matter for monitoring.
+3. SCOPE checks every rule's quote against the protocol text and finds its page; rules whose quote is not in the protocol are dropped.
+4. A lead CRA rewords, re-grades or rejects each rule, then creates the study profile. Accepted rules carry their protocol citation (number, version, page), and the change is logged.
+5. Every visit for that study is then judged against its own protocol: the LLM is told that study rules override general practice and to work out elapsed time (calendar or business days) from the dates in the note.
+
+`profiles/example_protocol_ZLV-301.pdf` is a short fictional protocol to try this with. Free-tier LLM requests may be used by the provider, so only use public (e.g. ClinicalTrials.gov) or fictional protocols until an enterprise LLM agreement is in place.
+
 ### Severity rubric (v3)
 
 The rubric was written and approved by an experienced CRA. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
@@ -61,19 +73,32 @@ Two escalation rules weigh a problem the way a CRA does. A **repeat finding** (a
 Each issue type has minor, major and critical examples in `scope/llm.py` (`RUBRIC_TEXT`). The v1 baseline model keeps its original 12 issue types.
 
 
+### Study profiles: the rubric is a feature, not code
+
+Monitoring standards change with the protocol, the study and the sponsor, so the rubric lives in a **study profile** that a lead CRA can edit in the app (Study profile tab):
+
+- **Topics and severities**: change what counts as minor, major or critical, switch off topics that do not apply, or add study-specific topics.
+- **Study rules**: plain-language rules from the protocol ("A missed Cycle 1 Day 1 PK sample is critical"). They override the default rubric.
+- **Escalation and thresholds**: how many subjects make a problem widespread, how far that raises it, whether repeats escalate, and the points for medium and high risk.
+- **Learning from corrections**: any CRA can correct a result ("this should be minor, because..."). Once a lead CRA approves a correction, SCOPE shows it to the LLM as an example whenever it reads a similar note, so it adapts to the study without retraining. Notes with corrections can be re-checked in the Accuracy check.
+
+Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are saved and shared as JSON files (`profiles/example_oncology_study.json` is an example). The default profile, **SCOPE standard**, is rubric v3.1 below.
+
 ## Setup (free Gemini API key)
 
 1. Create a free key at [aistudio.google.com](https://aistudio.google.com) (Get API key → Create API key).
 2. Deployed app: in Streamlit Community Cloud open the app's **Settings → Secrets** and add `GEMINI_API_KEY = "..."`. Never commit the key. Optionally pin a model with `GEMINI_MODEL = "..."`; by default SCOPE picks the newest available Gemini Flash model. If a model is not available on the free tier, is overloaded (HTTP 503), or has used up its own free quota (HTTP 429; free quotas are per model and reset at midnight Pacific time), SCOPE moves on to the next model, so one busy or exhausted model does not stop the app.
 3. Locally: `export GEMINI_API_KEY=...`, then `streamlit run app/streamlit_app.py` or `python -m scope.llm --file note.txt --letter`.
 
-Visitors can also paste their own key in the app's sidebar; it stays in their browser session. Free-tier requests may be used by the provider, so only send fictional or de-identified notes. A deployment on real study data would need an enterprise LLM agreement covering PHI.
+**Bring your own key, any provider.** In the sidebar, visitors can keep the app's free Gemini engine or bring their own key for Google Gemini, OpenAI, Anthropic Claude, or any OpenAI-compatible service (Azure OpenAI, Mistral, Groq, OpenRouter, a local Ollama or vLLM server). SCOPE lists the provider's models to choose from. Keys stay in the browser session and are sent only to that provider; own keys are not capped. Every provider's answer goes through the same schema, quote verification, rubric scoring and safety net, and each result says which provider and model read it. Answers are constrained to SCOPE's schema with each provider's structured output feature (Gemini `responseSchema`, OpenAI strict `json_schema`, Anthropic `output_config`), with a plain-JSON fallback for services that lack it. Only send fictional or de-identified notes; real study data needs an enterprise agreement with the provider.
 
 ## Evaluation
 
 ```bash
 GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten realistic --sleep 5
 ```
+
+**Stress test** (25 notes so far, growing to about 150): written to cover many writing styles, every visit type, all 22 issue types, both escalation rules and common traps (problems fixed on site, "no SAEs" negations, resolved past items, dates near the visit date). Labels were reviewed and approved by an experienced CRA, and none of these notes are in SCOPE's instructions, so this is the honest measure.
 
 Test sets: **realistic** (7 long, formal notes in the style of real CRA reports, provided by an experienced CRA) and **handwritten** (24 notes in other styles: field notes, e-mails, run-on sentences). The realistic notes shaped the rubric, so they are a development set; an independent set of notes that neither the prompt nor the code has seen is the next step.
 
@@ -174,6 +199,9 @@ scope/
   engine.py            the LLM engine: prompt with rubric and worked examples, verification, record
   llm.py               Gemini client (standard library), rubric scoring, quote checks, follow-up letter
   record.py            visit record, date and count normalization, audit summary
+  profile.py           study profiles: editable rubric, study rules, escalation, CRA corrections
+  protocol.py          protocol intake: read a protocol, draft cited study rules, build a profile
+  providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds
   search.py            similar past visits (TF-IDF; embeddings optional)
   metrics.py           risk, issue, span, action-item and calibration metrics

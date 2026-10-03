@@ -1,4 +1,4 @@
-"""Load the hand-written (``handwritten.txt``) and realistic (``realistic.txt``) evaluation notes as dataset rows."""
+"""Load the hand-written, realistic and stress-test evaluation notes (``*.txt`` in this folder) as dataset rows."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from scope.text import Span, bio_to_spans, char_spans_to_bio, tokenize
 
 HANDWRITTEN_PATH = Path(__file__).with_name("handwritten.txt")
 REALISTIC_PATH = Path(__file__).with_name("realistic.txt")
+STRESS_PATH = Path(__file__).with_name("stress.txt")
 _MARK_RE = re.compile(r"\[\[(.+?)\|([A-Z_]+)\]\]")
 
 
@@ -30,6 +31,11 @@ def parse_marked(marked: str) -> tuple[str, list[tuple[str, int, int]]]:
 
 def load_realistic() -> list[dict]:
     return load_handwritten(REALISTIC_PATH, style="realistic")
+
+
+def load_stress() -> list[dict]:
+    """The stress-test set (rubric v3.1): new notes across styles, visit types, issue types and traps."""
+    return load_handwritten(STRESS_PATH, style="stress")
 
 
 def load_handwritten(path: str | Path = HANDWRITTEN_PATH, style: str = "handwritten") -> list[dict]:
@@ -54,5 +60,6 @@ def load_handwritten(path: str | Path = HANDWRITTEN_PATH, style: str = "handwrit
             "risk": fields["risk"].strip(), "issues": issues, "style": style, "unseen": True,
             "actions": [{k: a[k] for k in ("action", "owner", "due")} for a in assemble_actions(text, spans)],
             "spans": [{"label": lab, "char_start": s, "char_end": e, "text": text[s:e]} for lab, s, e in char_spans],
+            **{k: fields[k].strip() for k in ("label", "tests") if k in fields},
         })
     return rows

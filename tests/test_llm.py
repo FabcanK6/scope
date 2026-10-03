@@ -149,10 +149,10 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(rec["llm_output"]["visit"]["screened"], "5")
 
     def test_prompt_examples_are_not_test_notes(self):
-        from scope.data.handwritten import load_handwritten, load_realistic
+        from scope.data.handwritten import load_handwritten, load_realistic, load_stress
         from scope.engine import SYSTEM
 
-        for r in load_handwritten() + load_realistic():
+        for r in load_handwritten() + load_realistic() + load_stress():
             first = " ".join(r["text"].split())[:80]
             self.assertNotIn(first, " ".join(SYSTEM.split()), r["id"])
 

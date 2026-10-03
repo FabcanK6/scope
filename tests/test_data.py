@@ -3,7 +3,7 @@ import unittest
 
 from scope.data import templates as T
 from scope.data.generate import generate, sample_note
-from scope.data.handwritten import load_handwritten, load_realistic
+from scope.data.handwritten import load_handwritten, load_realistic, load_stress
 from scope.record import assemble_actions
 from scope.schema import BIO_LABELS, ISSUE_CODES, RISK_LEVELS
 from scope.text import bio_to_spans, tokenize
@@ -47,6 +47,14 @@ class TestGenerator(unittest.TestCase):
 
 
 class TestHandwritten(unittest.TestCase):
+    def test_stress(self):
+        rows = load_stress()
+        self.assertEqual(len(rows), 25)
+        self.assertEqual(len({r["id"] for r in rows}), 25)
+        self.assertTrue(all(r["risk"] in RISK_LEVELS and set(r["issues"]) <= set(ISSUE_CODES) for r in rows))
+        self.assertEqual({r["risk"] for r in rows}, {"low", "medium", "high"})
+        self.assertTrue(all(r["text"] and r["tests"] for r in rows))
+
     def test_realistic(self):
         rows = load_realistic()
         self.assertEqual(len(rows), 7)

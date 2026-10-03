@@ -17,10 +17,11 @@ import json
 import re
 import time
 
-from scope.llm import ESCALATION_SUBJECTS, RUBRIC_TEXT, BadAnswer, _norm, final_severity, SEVERITIES, STATUSES, GeminiClient, LLMError, score_findings, verify_quote
+from scope import profile as _profile
+from scope.llm import SEVERITIES, STATUSES, BadAnswer, GeminiClient, LLMError, _norm, verify_quote
 from scope.record import build_record, normalize_date
 from scope.rules import RuleParser
-from scope.schema import ISSUE_BY_CODE, ISSUE_CODES
+from scope.schema import ISSUE_CODES
 from scope.text import bio_to_spans, char_spans_to_bio, sentences, tokenize
 
 _STR = {"type": "STRING", "nullable": True}
@@ -52,7 +53,12 @@ EXTRACT_SCHEMA = {
     "propertyOrdering": ["findings", "actions", "summary", "visit"],
 }
 
-ISSUE_LIST = "\n".join(f"- {c}: {ISSUE_BY_CODE[c].display} ({ISSUE_BY_CODE[c].group})" for c in ISSUE_CODES)
+def extract_schema(profile: dict) -> dict:
+    """The answer schema, with the issue list of this profile (enabled topics only)."""
+    schema = copy.deepcopy(EXTRACT_SCHEMA)
+    schema["properties"]["findings"]["items"]["properties"]["issue"]["enum"] = [
+        t["code"] for t in _profile.enabled_topics(profile)]
+    return schema
 
 # Worked examples for the prompt. They are written for the prompt only and do not appear in any test set
 # or in the app's example notes, so evaluation and the demo buttons are fair.
@@ -153,17 +159,22 @@ for _answer in (ANSWER_1, ANSWER_2, ANSWER_3):
             _f.setdefault(_k, _v)
 
 
-def _dump(answer: dict) -> str:
+def _dump(answer: dict, profile: dict) -> str:
+    enabled = {t["code"] for t in _profile.enabled_topics(profile)}
+    answer = {**answer, "findings": [f for f in answer["findings"] if f["issue"] in enabled]}
     return json.dumps({k: answer[k] for k in EXTRACT_SCHEMA["propertyOrdering"]})
 
 
-SYSTEM = f"""You read clinical trial site monitoring visit notes for a clinical research associate (CRA) and turn
+def build_system(profile: dict) -> str:
+    """The LLM's instructions for one study profile: issue types, rubric, study rules, rules, worked examples."""
+    issue_list = "\n".join(f"- {t['code']}: {t['display']} ({t['group']})" for t in _profile.enabled_topics(profile))
+    return f"""You read clinical trial site monitoring visit notes for a clinical research associate (CRA) and turn
 each note into structured data.
 
 Issue types:
-{ISSUE_LIST}
+{issue_list}
 
-{RUBRIC_TEXT}
+{_profile.rubric_text(profile)}
 
 Rules:
 - List every topic from the issue types that the note mentions, including topics mentioned only to confirm they
@@ -181,6 +192,9 @@ Rules:
   affected yet (product quarantined, training planned before duties, an assessment rescheduled), use the lower
   severity, unless the rubric lists that situation as major or critical.
 - An open action item on its own is not a finding. Report a finding only when the note describes a problem.
+- When the study rules give a definition or a deadline (for example what counts as an SAE, or "within 2 business
+  days"), judge the note by the study rules, not general practice. Work out elapsed time from the dates in the note;
+  business days are Monday to Friday. If the note lacks the dates needed, say so in the explanation.
 - Give each finding its own severity from the rubric, then fill the escalation fields. Do not raise the severity
   yourself for repeats or many subjects; SCOPE does that.
 - Do not invent anything. If the note does not say it, leave it out.
@@ -188,17 +202,20 @@ Rules:
 
 Example note:
 \"\"\"{EXAMPLE_1}\"\"\"
-Answer: {_dump(ANSWER_1)}
+Answer: {_dump(ANSWER_1, profile)}
 
 Example note:
 \"\"\"{EXAMPLE_2}\"\"\"
-Answer: {_dump(ANSWER_2)}
+Answer: {_dump(ANSWER_2, profile)}
 
 Example note:
 \"\"\"{EXAMPLE_3}\"\"\"
-Answer: {_dump(ANSWER_3)}"""
+Answer: {_dump(ANSWER_3, profile)}"""
 
-ENGINE_REV = "6.1"  # bump when the engine's behaviour changes, so cached answers are not reused
+
+SYSTEM = build_system(_profile.default_profile())
+
+ENGINE_REV = "7.1"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -323,12 +340,20 @@ def safety_alerts(text: str, findings: list[dict]) -> list[str]:
 class LLMParser:
     name = "llm"
 
-    def __init__(self, client: GeminiClient, sleep: float = 0.0):
+    def __init__(self, client: GeminiClient, sleep: float = 0.0, profile: dict | None = None):
         self.client = client
         self.sleep = sleep
+        self.profile = profile or _profile.default_profile()
+
+    def system_for(self, text: str) -> str:
+        """Instructions for this note: the profile's rubric plus the approved CRA corrections most like it."""
+        system = build_system(self.profile)
+        learned = _profile.corrections_text(self.profile, text)
+        return f"{system}\n\n{learned}" if learned else system
 
     def extract(self, text: str) -> dict:
-        return self.client.generate_json(SYSTEM, f"Note:\n\"\"\"\n{text}\n\"\"\"\nAnswer:", EXTRACT_SCHEMA)
+        return self.client.generate_json(self.system_for(text), f"Note:\n\"\"\"\n{text}\n\"\"\"\nAnswer:",
+                                         extract_schema(self.profile))
 
     attempts = 3  # a garbled or empty answer is asked again, never scored
 
@@ -374,21 +399,23 @@ class LLMParser:
 
         # findings: verify the quoted evidence
         findings = []
+        topics = _profile.topic_map(self.profile)
+        esc_n = self.profile["escalation"]["subjects_threshold"]
         for f in data.get("findings") or []:
-            if f.get("issue") not in ISSUE_CODES or f.get("status") not in STATUSES:
+            if f.get("issue") not in topics or not topics[f["issue"]]["enabled"] or f.get("status") not in STATUSES:
                 continue
             if f.get("severity") not in SEVERITIES:
                 f["severity"] = "minor"
             f["verified"] = verify_quote(f.get("evidence", ""), text)
-            f["display"] = ISSUE_BY_CODE[f["issue"]].display
-            f["group"] = ISSUE_BY_CODE[f["issue"]].group
+            f["display"] = topics[f["issue"]]["display"]
+            f["group"] = topics[f["issue"]]["group"]
             loc = _find(text, f.get("evidence"))
             f["char_start"], f["char_end"] = loc if loc else (-1, -1)
             try:
                 f["subjects_affected"] = int(f.get("subjects_affected")) if f.get("subjects_affected") else None
             except (TypeError, ValueError):
                 f["subjects_affected"] = None
-            claims = bool(f.get("repeat") or f.get("site_wide") or (f["subjects_affected"] or 0) >= ESCALATION_SUBJECTS)
+            claims = bool(f.get("repeat") or f.get("site_wide") or (f["subjects_affected"] or 0) >= esc_n)
             esc = str(f.get("escalation_evidence") or "")
             # escalation only counts when the note really says it (in the escalation quote or the evidence itself)
             f["escalation_ok"] = claims and bool(esc.strip() and verify_quote(esc, text)) or (
@@ -396,12 +423,12 @@ class LLMParser:
             if claims and not f["escalation_ok"]:
                 problems.append(f"'{f['display']}' was reported as a repeat or widespread problem, but the quote "
                                 "for that is not in the note, so it was not raised")
-            f["final_severity"], f["escalated_by"] = final_severity(f)
+            f["final_severity"], f["escalated_by"] = _profile.final_severity(f, self.profile)
             findings.append(f)
         unverified = [f for f in findings if not f["verified"]]
         if unverified:
             problems.append(f"{len(unverified)} finding(s) quote text that is not in the note and were ignored")
-        scored = score_findings(findings)
+        scored = _profile.score(findings, self.profile)
         alerts = safety_alerts(text, findings)
 
         # action items: the action text must be in the note; owner and due are looked for in the same sentence
@@ -429,7 +456,7 @@ class LLMParser:
             if all(sp[2] <= k[1] or sp[1] >= k[2] for k in kept):
                 kept.append(sp)
         tags = char_spans_to_bio(tokens, kept)
-        issues = [c for c in ISSUE_CODES if c in scored["active"]]
+        issues = [t["code"] for t in self.profile["topics"] if t["code"] in scored["active"]]
         return {
             "tokens": tokens, "tags": tags, "spans": bio_to_spans(tokens, tags, text),
             "risk": scored["risk"], "risk_probs": {}, "issues": issues, "issue_probs": {c: 1.0 for c in issues},
@@ -438,7 +465,9 @@ class LLMParser:
                                                       for a in action_items],
             "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
             "backend": self.name,
-            "model": self.client.model, "llm_output": raw_answer,
+            "model": self.client.model, "provider": getattr(self.client, "provider", ""),
+            "llm_output": raw_answer, "profile": _profile.label(self.profile),
+            "topic_names": {c: (t["display"], t["group"]) for c, t in _profile.topic_map(self.profile).items()},
         }
 
     def predict_batch(self, texts: list[str]) -> list[dict]:
