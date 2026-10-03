@@ -221,15 +221,16 @@ and SCOPE applies those itself.
   sent to the IRB.
 - UNBLINDING. major: blinded staff could see unblinded documents, no unblinding. critical: unplanned unblinding not
   reported.
-- PROTOCOL_DEVIATION. minor: a single out-of-window visit. major: important deviations; missed safety assessments;
-  deviations not logged.
+- PROTOCOL_DEVIATION. minor: a single out-of-window visit or assessment (including one rescheduled outside its
+  window). major: important deviations; safety assessments missed entirely (not just late); deviations not logged.
 - DOSING_ERROR. minor: dosing time not recorded. major: missed doses undocumented; compliance not reconciled
   (including returned doses not counted).
   critical: wrong dose, double dose, or dosed despite a hold criterion.
 - IP_ACCOUNTABILITY. minor: small count difference explained on site. major: kits unaccounted for; wrong kit
   dispensed. critical: expired investigational product dispensed.
-- TEMP_EXCURSION. minor: brief excursion with no product impact, reported. major: excursion not reported; logs not
-  kept. critical: product used after an excursion before Sponsor assessment.
+- TEMP_EXCURSION. minor: brief excursion with no product impact, reported; or an excursion that was reported with the
+  product quarantined and not used while the Sponsor decides. major: excursion not reported; logs not kept.
+  critical: product used after an excursion before Sponsor assessment.
 - LAB_SAMPLES. minor: lab kit supplies running low. major: samples mishandled or not shipped; central lab results not
   reviewed.
 - DATA_ENTRY_BACKLOG. minor: a few pages or one concomitant medication not entered. major: backlog older than 60 days,
@@ -240,9 +241,13 @@ and SCOPE applies those itself.
   site refuses access to source documents.
 - SOURCE_DOCS. minor: corrections not initialed or dated. major: source missing or contradicts EDC; ALCOA+ failures.
   critical: falsified or back-dated records.
-- STAFF_TURNOVER (staff, training and delegation). minor: one CV or GCP certificate expired. major: staff not on the
-  delegation log; turnover with no backup. critical: untrained or undelegated staff performing study procedures.
-- PI_OVERSIGHT. minor: one late sign-off. major: PI not signing labs or eCRFs; PI unavailable to the team.
+- STAFF_TURNOVER (staff, training and delegation). minor: one CV or GCP certificate expired; training still to be
+  completed before the person starts study work. major: staff not on the delegation log who are not yet doing study
+  work; turnover with no backup. critical: staff already performing study procedures or running visits without
+  delegation or training.
+- PI_OVERSIGHT. minor: one late sign-off. major: PI not signing labs or eCRFs (a backlog or a long delay); PI
+  unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, not
+  a finding.
 - ENROLLMENT_LAG. minor: slightly behind target. major: far behind target.
 - REG_DOCS. minor: one document misfiled. major: missing 1572, amendment approval or licenses; a pending IRB approval
   that blocks screening. critical: enrolling after IRB approval lapsed.

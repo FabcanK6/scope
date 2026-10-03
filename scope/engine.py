@@ -177,6 +177,10 @@ Rules:
   corrections or reasoning inside a value.
 - "actions" are open follow-ups still to be done. owner, action and due are copied word for word from the note
   (due may be null). Completed tasks, things already done during the visit, and general reminders are not actions.
+- Rate what has actually gone wrong. When the site has already taken the right step and no subject or data has been
+  affected yet (product quarantined, training planned before duties, an assessment rescheduled), use the lower
+  severity, unless the rubric lists that situation as major or critical.
+- An open action item on its own is not a finding. Report a finding only when the note describes a problem.
 - Give each finding its own severity from the rubric, then fill the escalation fields. Do not raise the severity
   yourself for repeats or many subjects; SCOPE does that.
 - Do not invent anything. If the note does not say it, leave it out.
@@ -194,7 +198,7 @@ Example note:
 \"\"\"{EXAMPLE_3}\"\"\"
 Answer: {_dump(ANSWER_3)}"""
 
-ENGINE_REV = "6.0"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "6.1"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
