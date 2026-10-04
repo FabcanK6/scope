@@ -159,9 +159,9 @@ GEMINI_API_KEY=... python -m scope.evaluate --backend llm --data handwritten rea
 
 | Test set | Notes | Risk level agrees | High-risk visits caught | When |
 |---|---|---|---|---|
-| Stress test | 25 | 23 (92%) | 9 of 10 | Oct 2026, Gemini Flash |
+| Stress test | 25 | 24 (96%) | 10 of 10 | Oct 2026, re-run after the quota reset (earlier: 23, 9 of 10); one false alarm, st-024 |
 | Formal visit reports | 7 | 7 | all | Oct 2026, after rubric rulings |
-| Demo studies (each under its own protocol) | 15 | 12 (80%) | 5 of 6 | Oct 2026, mostly the smallest Gemini model (free quota spent); the three misses led to fixes: quotes joined with "...", protocol rules setting severity, and one relabel |
+| Demo studies (each under its own protocol) | 15 | 14 (93%) | 6 of 7 | Oct 2026, re-run after the fixes (earlier: 12 of 15, mostly the smallest model); the miss, vax-118-3, led to the "one sentence, two problems" rule |
 
 Results vary with the model that answered: the free tier falls back to smaller models when the larger ones' daily quota is used up. Every result in the app says which model read it, and the Accuracy check can be re-run at any time.
 

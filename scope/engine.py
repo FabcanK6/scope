@@ -203,6 +203,10 @@ Rules:
   affected yet (product quarantined, training planned before duties, an assessment rescheduled), use the lower
   severity, unless the rubric lists that situation as major or critical.
 - An open action item on its own is not a finding. Report a finding only when the note describes a problem.
+- One sentence can show two different problems, often a problem and its cause when the cause is itself a problem
+  under another topic. Report a finding for each topic, both quoting that sentence, and rate each one by the rubric
+  or study rule for its own topic. Do not split one problem into two topics just because it can be described both
+  ways.
 - If a study rule says a situation is not a problem (for example "not an SAE"), give that finding status "no_issue".
 - When the study rules give a definition or a deadline (for example what counts as an SAE, or "within 2 business
   days"), judge the note by the study rules, not general practice. Work out elapsed time from the dates in the note;
@@ -227,7 +231,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "8.7"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "8.8"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
