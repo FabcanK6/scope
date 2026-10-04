@@ -227,7 +227,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "7.9"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "8.7"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -290,6 +290,20 @@ def _count(text: str, value, key: str) -> tuple[int, int] | None:
         if near:
             return min(near, key=lambda h: abs(h[0] - cue.start()))
     return None
+
+
+MAX_DETAIL_LEN = 60
+
+
+def _garbled_detail(value, text: str) -> bool:
+    """A visit detail that is clearly not a copied value: too long, letters from another script that the note does
+    not use, the model thinking aloud, or a value cut off with an ellipsis that the note does not contain."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if _norm(value) in _norm(text):
+        return False
+    return (len(value) > 80 or bool(_FOREIGN.search(value) and not _FOREIGN.search(text))
+            or bool(_RAMBLE.search(value)) or "\u2026" in value)
 
 
 def _short(value, n: int = 60) -> str:
@@ -437,12 +451,22 @@ class LLMParser:
         header = {lab: (s0, e0) for lab, s0, e0 in RuleParser()._metadata(text, [])}
         for key, label in (("visit_type", "VISIT_TYPE"), ("visit_date", "VISIT_DATE"), ("site", "SITE"),
                            ("monitor", "MONITOR"), ("pi", "PI"), ("screened", "SCREENED"), ("enrolled", "ENROLLED")):
+            garbled = _garbled_detail(v.get(key), text)
+            if garbled:
+                # a looping or garbled value: matching a piece of it would grab a chunk of the note (live: a
+                # visit_type that swallowed the site and the date), so ignore it and use the header line instead
+                self.client.trail.append(f"garbled {key.replace('_', ' ')} from the AI ignored: \"{_short(v[key])}\"")
+                v[key] = None
             start = date_at.end() if (key == "visit_date" and date_at) else 0
             loc = _count(text, v.get(key), key) if key in COUNT_CUES else _locate(text, v.get(key), start)
+            if loc and loc[1] - loc[0] > MAX_DETAIL_LEN:
+                loc = None  # a visit detail is a few words, never a sentence
             if not loc and label in HEADER_FALLBACK:
                 loc = header.get(label)  # clearly labelled header line, e.g. "Date: ..." or "Visit Type: ..."
             if loc:
                 char_spans.append((label, *loc))
+            elif garbled:
+                problems.append(f"the {key.replace('_', ' ')} could not be read from the AI's answer")
             elif v.get(key):
                 problems.append(f"'{_short(v.get(key))}' ({key.replace('_', ' ')}) is not in the note")
 

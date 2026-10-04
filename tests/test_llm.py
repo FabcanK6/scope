@@ -259,6 +259,33 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(rec["risk"]["level"], "medium")
         self.assertEqual(rec["visit"]["visit_type"]["code"], "IMV")  # the looping tail is not kept
 
+    def test_garbled_visit_type_does_not_swallow_site_and_date(self):
+        from scope.engine import LLMParser
+
+        # live (v8.6, fallback model): the visit type came back garbled, a piece of it matched a chunk of the
+        # first line, and that chunk pushed out the real site and visit date
+        note = ("IMV site 77 - 7 Oct 2026. Reviewed ICFs for 6 subjects; subj 77-004 signed an outdated ICF v2.0. "
+                "PI to re-consent subj 77-004 by 14 Oct 2026.")
+        answer = {"visit": {"visit_type": "imv礼 site 77 - 7 oct 2026… site 77 - 7 oct 2026…",
+                            "visit_date": None, "site": "site 77"},
+                  "summary": "Outdated consent.", "actions": [],
+                  "findings": [{"issue": "CONSENT", "status": "active", "severity": "major",
+                                "evidence": "subj 77-004 signed an outdated ICF v2.0", "explanation": "old ICF"}]}
+        rec = LLMParser(FakeClient([fake_response(answer)])).analyze(note)
+        v = rec["visit"]
+        self.assertEqual(v["visit_type"]["code"], "IMV")
+        self.assertEqual(v["visit_type"]["text"], "IMV")
+        self.assertEqual(v["site"]["text"], "site 77")
+        self.assertEqual(v["visit_date"]["iso"], "2026-10-07")
+        self.assertEqual(rec["risk"]["level"], "medium")
+        self.assertEqual(rec["review"]["reasons"], [])  # recovered from the header line, nothing to review
+        self.assertTrue(any(t.startswith("garbled visit type") for t in rec["engine_log"]))
+        # the same garbled value through _locate alone would have matched a long chunk; a clean value still works
+        rec = LLMParser(FakeClient([fake_response({**answer, "visit": {"visit_type": "IMV",
+                                                                       "visit_date": "7 Oct 2026"}})])).analyze(note)
+        self.assertEqual(rec["visit"]["visit_date"]["iso"], "2026-10-07")
+        self.assertFalse(any(t.startswith("garbled") for t in rec["engine_log"]))
+
     def test_garbled_answer_is_retried_never_scored(self):
         from scope.data.handwritten import load_handwritten
         from scope.engine import UNREADABLE, LLMParser
