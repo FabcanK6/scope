@@ -280,13 +280,13 @@ class GeminiClient(LLMClient):
 # ---------------------------------------------------------------------------
 # Second opinion
 # ---------------------------------------------------------------------------
-# The rubric now lives in study profiles (scope/profile.py); this is the default profile's text (rubric v3.2).
+# The rubric now lives in study profiles (scope/profile.py); this is the default profile's text (rubric v3.3).
 RUBRIC_TEXT = _profile.rubric_text(_profile.default_profile())
 ESCALATION_SUBJECTS = 3  # default profile: a problem affecting this many subjects or more is raised one level
 
 
 def final_severity(f: dict, profile: dict | None = None) -> tuple[str, list[str]]:
-    """Escalation for one finding under a profile (default: rubric v3.2). See ``scope.profile.final_severity``."""
+    """Escalation for one finding under a profile (default: rubric v3.3). See ``scope.profile.final_severity``."""
     return _profile.final_severity(f, profile or _profile.default_profile())
 
 

@@ -184,7 +184,7 @@ def api_key() -> str | None:
 
 
 def current_profile() -> dict:
-    """The study profile in use in this browser session (default: SCOPE standard, rubric v3.2)."""
+    """The study profile in use in this browser session (default: SCOPE standard, rubric v3.3)."""
     if "profile" not in st.session_state:
         st.session_state["profile"] = P.default_profile()
     return st.session_state["profile"]

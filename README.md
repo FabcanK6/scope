@@ -110,9 +110,9 @@ SCOPE_CURATOR_KEY = "a passphrase only curators know"
 
 Without these, SCOPE works as before and corrections improve each study only. For a local run, `SCOPE_LEARNING_DIR=/some/folder` keeps the library in a folder instead.
 
-### Severity rubric (v3.2)
+### Severity rubric (v3.3)
 
-The rubric was written and approved by an experienced clinical research professional. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
+Version 3.2 was written and approved by an experienced clinical research professional; v3.3 adds two rulings: one sentence that shows two different problems counts under each topic, and a PI on leave with no covering investigator is one problem (PI oversight), not also a delegation problem. Each active finding scores 1 (minor), 3 (major) or 6 (critical), counting the worst finding per topic: any critical finding or two major findings make the visit **high** risk, one major finding or three minor findings make it **medium**, anything less is **low**. Findings corrected and verified during the visit do not count, and critical findings stay active even when a CAPA is in place.
 
 Two escalation rules weigh a problem the way an experienced reviewer does. A **repeat finding** (also found at an earlier visit, or an earlier action still open) is raised one level. A problem affecting **3 or more subjects**, or described as site-wide, is raised one level, up to major. Both can apply, so a minor gap that affects five subjects and was cited last visit becomes critical. The LLM only reports the facts (repeat, number of subjects, and a quote showing it); SCOPE applies the rules, and only when the quote is really in the note.
 
@@ -137,7 +137,7 @@ Monitoring standards change with the protocol, the study and the sponsor, so the
 - **Escalation and thresholds**: how many subjects make a problem widespread, how far that raises it, whether repeats escalate, and the points for medium and high risk.
 - **Learning from corrections**: any user can correct a result ("this should be minor, because..."). Once the study lead approves a correction, SCOPE shows it to the LLM as an example whenever it reads a similar note, so it adapts to the study without retraining. Notes with corrections can be re-checked in the Accuracy check.
 
-Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are kept in the user's browser under **My studies** and can be downloaded as JSON files to back up, share or move to another computer. The default profile, **SCOPE standard**, is rubric v3.2 below.
+Every change is versioned and logged, and every result records the profile name, version and fingerprint that scored it, so a QA reviewer can see exactly which rules were applied. Profiles are kept in the user's browser under **My studies** and can be downloaded as JSON files to back up, share or move to another computer. The default profile, **SCOPE standard**, is rubric v3.3 below.
 
 ## Setup (free Gemini API key)
 

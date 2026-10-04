@@ -62,6 +62,9 @@ class TestEngineDeadlines(unittest.TestCase):
         self.assertEqual(sae["deadline_check"]["elapsed"], 2)
         self.assertIn("The AI model said late", rec["checks"][0])
         self.assertIn("2 business days", rec["checks"][0])
+        # the AI's summary ("Late SAE.") was written before SCOPE's count; it now says it is out of date
+        self.assertTrue(rec["summary"].startswith("Late SAE. SCOPE's own count of the dates:"))
+        self.assertIn("was on time", rec["summary"])
 
     def test_same_note_under_the_default_24_hours(self):
         ans = {**LIVE_ANSWER, "findings": [{**LIVE_ANSWER["findings"][0], "status": "no_issue",
@@ -70,6 +73,7 @@ class TestEngineDeadlines(unittest.TestCase):
         self.assertEqual(rec["risk"]["level"], "high")
         self.assertEqual(rec["findings"][0]["final_severity"], "critical")
         self.assertIn("this study allows 24 hours, so it was late", rec["checks"][0])
+        self.assertIn("was late, so the AI's wording above is out of date", rec["summary"])
 
     def test_dates_not_in_the_note_are_ignored(self):
         ans = {**LIVE_ANSWER, "findings": [{**LIVE_ANSWER["findings"][0], "reported_on": "Friday 2 October 2026"}]}

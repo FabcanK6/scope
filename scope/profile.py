@@ -11,7 +11,8 @@ A profile holds everything that decides how a visit is scored:
                      similar notes, so SCOPE adapts to the study without retraining
 * ``changes``      - a dated log of edits (who changed what), for the audit trail
 
-The default profile is the expert-approved rubric v3.2. Profiles are saved and shared as JSON files.
+The default profile is rubric v3.3 (expert-approved v3.2 plus the rulings since). Profiles are saved and
+shared as JSON files.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ SEVERITY_POINTS = {"minor": 1, "major": 3, "critical": 6}
 # (code, group, display, minor, major, critical) - rubric v3.2, approved by an experienced clinical research
 # professional on 2026-10-03
 # (v3.2: PI not assessing AEs is PI oversight; how eligibility questions are answered is PI oversight).
+# (v3.3: a PI on leave with no covering investigator is one problem, PI oversight; one sentence that shows two
+# different problems counts under each topic.)
 _V31 = [
     ("SAE_REPORTING", "Patient safety & consent", "Late or missing SAE reporting",
      "SAE form detail wrong, corrected",
@@ -90,8 +93,9 @@ _V31 = [
     ("PI_OVERSIGHT", "Site operations", "PI oversight",
      "one late sign-off",
      "PI not signing labs or eCRFs (a backlog or a long delay); PI not assessing AEs (causality or grade); PI "
-     "unavailable to the team. A routine request for the PI to sign items before the next contact is an action item, "
-     "not a finding", ""),
+     "unavailable to the team, including a PI on leave with no covering investigator designated (one problem: PI "
+     "oversight, not also a delegation problem). A routine request for the PI to sign items before the next contact "
+     "is an action item, not a finding", ""),
     ("ENROLLMENT_LAG", "Site operations", "Enrollment",
      "slightly behind target", "far behind target", ""),
     ("REG_DOCS", "Site operations", "Regulatory and essential documents",
@@ -113,8 +117,9 @@ GROUPS = ["Patient safety & consent", "Protocol & drug", "Data quality", "Site o
 def default_profile() -> dict:
     return {
         "name": "SCOPE standard",
-        "version": "3.2",
-        "description": "Severity rubric v3.2, written and approved by an experienced clinical research professional.",
+        "version": "3.3",
+        "description": "Severity rubric v3.3: v3.2 written and approved by an experienced clinical research "
+                       "professional, plus later rulings.",
         "topics": [{"code": c, "group": g, "display": d, "minor": mi, "major": ma, "critical": cr, "enabled": True}
                    for c, g, d, mi, ma, cr in _V31],
         "study_rules": [],

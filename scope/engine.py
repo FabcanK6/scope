@@ -231,7 +231,7 @@ Answer: {_dump(ANSWER_3, profile)}"""
 
 SYSTEM = build_system(_profile.default_profile())
 
-ENGINE_REV = "8.8"  # bump when the engine's behaviour changes, so cached answers are not reused
+ENGINE_REV = "8.9"  # bump when the engine's behaviour changes, so cached answers are not reused
 
 # visit details that may be taken from a labelled header line when the model leaves them out
 HEADER_FALLBACK = {"VISIT_TYPE", "VISIT_DATE", "SITE"}
@@ -308,6 +308,17 @@ def _garbled_detail(value, text: str) -> bool:
         return False
     return (len(value) > 80 or bool(_FOREIGN.search(value) and not _FOREIGN.search(text))
             or bool(_RAMBLE.search(value)) or "\u2026" in value)
+
+
+def _summary_with_overrides(summary: str, findings: list[dict]) -> str:
+    """The AI's summary was written before SCOPE counted the deadlines. When SCOPE's count disagrees with the AI,
+    say so right after the summary, so the summary never contradicts the result (live: "reported late, critical"
+    above a LOW result whose deadline check said "on time")."""
+    notes = [f"{f['display']} was {f['deadline_check']['verdict']}" for f in findings if f.get("deadline_overridden")]
+    if not notes:
+        return summary
+    return (f"{summary.strip()} SCOPE's own count of the dates: {'; '.join(notes)}, so the AI's wording above is out "
+            "of date on this point.")
 
 
 def _short(value, n: int = 60) -> str:
@@ -544,7 +555,8 @@ class LLMParser:
             "severities": scored["active"], "points": scored["points"], "findings": findings,
             "action_items": action_items, "actions": [{k: a[k] for k in ("action", "owner", "due")}
                                                       for a in action_items],
-            "summary": data.get("summary", ""), "review_reasons": alerts + problems, "alerts": alerts,
+            "summary": _summary_with_overrides(data.get("summary", ""), findings),
+            "review_reasons": alerts + problems, "alerts": alerts,
             "checks": checks,
             "backend": self.name,
             "model": self.client.model, "provider": getattr(self.client, "provider", ""), "seconds": seconds,
@@ -581,6 +593,7 @@ class LLMParser:
             return
         if result["verdict"] != said:
             message += f" The AI model said {said}; SCOPE's count is used."
+            f["deadline_overridden"] = True
         f["explanation"] = message
         checks.append(message)
 

@@ -86,7 +86,7 @@ class TestProtocol(unittest.TestCase):
         draft = PR.draft_rules(FakeClient([fake_response(DRAFT_ANSWER)]), PAGES)
         prof = PR.apply_rules(P.default_profile(), draft, [0, 1], "zlv301.pdf", who="Lead CRA")
         self.assertEqual(prof["name"], "ZLV-301 study profile")
-        self.assertEqual(prof["version"], "3.3")
+        self.assertEqual(prof["version"], P.bump_version(P.default_profile()["version"]))
         self.assertEqual(len(prof["study_rules"]), 2)
         self.assertIn("[SAE_REPORTING, critical if broken] (protocol ZLV-301 Amendment 2, p. 2)",
                       prof["study_rules"][0])
