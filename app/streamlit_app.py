@@ -25,6 +25,8 @@ from scope import profile as P  # noqa: E402
 from scope import demos as DM  # noqa: E402
 from scope import learning as L  # noqa: E402
 from scope import ownmodel as OM  # noqa: E402
+from scope import reports as RP  # noqa: E402
+from scope import tracker as TR  # noqa: E402
 from scope import protocol as PR  # noqa: E402
 from scope import providers as PV  # noqa: E402
 from scope.data.generate import read_jsonl  # noqa: E402
@@ -273,6 +275,119 @@ def remember_study(prof: dict, replaces: str | None = None) -> None:
     st.session_state["pending_study"] = MY_PREFIX + prof["name"]
 
 
+TRACKER_KEY = "scope.tracker.v1"
+
+
+def tracker() -> dict:
+    """Site history and open actions for every study, kept in this browser (scope/tracker.py)."""
+    return st.session_state.setdefault("tracker", {})
+
+
+def tracker_load() -> None:
+    """Read the site history from the browser once (merged with anything recorded before it answered)."""
+    if _browser_js is None or st.session_state.get("tracker_loaded"):
+        return
+    raw = _browser_js(js_expressions=f"localStorage.getItem('{TRACKER_KEY}') || '{{}}'", key="scope_tr_read")
+    if raw is None:
+        return
+    try:
+        saved = json.loads(raw)
+        saved = saved if isinstance(saved, dict) else {}
+    except ValueError:
+        saved = {}
+    for study, sites in saved.items():
+        for site, visits in (sites or {}).items() if isinstance(sites, dict) else []:
+            for v in visits if isinstance(visits, list) else []:
+                if isinstance(v, dict) and v.get("key"):
+                    TR.add_visit(tracker(), study, site, v)
+    st.session_state["tracker_loaded"] = True
+    st.session_state["tracker_saved"] = hashlib.sha256(json.dumps(saved, sort_keys=True).encode()).hexdigest()
+
+
+def tracker_save() -> None:
+    """Write the site history back to the browser whenever it changed (called at the end of each run)."""
+    if _browser_js is None or not st.session_state.get("tracker_loaded"):
+        return
+    payload = json.dumps(tracker(), sort_keys=True)
+    digest = hashlib.sha256(payload.encode()).hexdigest()
+    if st.session_state.get("tracker_saved") != digest:
+        _browser_js(js_expressions=f"localStorage.setItem('{TRACKER_KEY}', {json.dumps(payload)}); 'saved'",
+                    key=f"scope_tr_write_{digest[:12]}")
+        st.session_state["tracker_saved"] = digest
+
+
+def site_history_panel(rec: dict, note: str) -> None:
+    """Record this visit in the site's history and show what is still open from earlier visits."""
+    site = TR.site_key(rec)
+    if not site:
+        st.caption("No site number in this note, so it was not added to a site history.")
+        return
+    study = current_profile()["name"]
+    entry = TR.visit_entry(rec, note)
+    TR.add_visit(tracker(), study, site, entry)
+    for h in TR.repeat_hints(tracker(), study, site, rec, note):
+        when = h["last_date"] or "date not given"
+        st.info(f"**{h['display']}** was also active at this site's previous visit ({when}, {h['last_severity']}). "
+                "If it is the same problem, the rubric treats it as a repeat finding (one level higher); the note "
+                "does not say so, so SCOPE has not raised it.")
+    still_open = TR.open_actions(tracker(), study, site, entry["key"])
+    label = f"Still open from earlier visits to site {site} ({len(still_open)})"
+    with st.expander(label, expanded=bool(still_open)):
+        if not still_open:
+            st.caption("Nothing open from earlier visits. This visit is saved to the site history in this browser.")
+        for a in still_open:
+            due = f" · due {a['due']}" if a.get("due") else ""
+            owner = f" · {a['owner']}" if a.get("owner") else ""
+            if st.checkbox(f"{a['action']}{owner}{due} (visit {a['visit_date'] or '?'})", key=f"done_{a['id']}"):
+                TR.set_done(tracker(), study, site, a["id"], True)
+                st.rerun()
+        if still_open:
+            st.caption("Tick an item once this note (or anything else) shows it is done. Saved in this browser.")
+
+
+def sites_tab() -> None:
+    """Every site in the current study: visits, risk over time and open action items."""
+    study = current_profile()["name"]
+    st.markdown(f"**Site history for {study}.** Each visit you read for this study is added to its site, so the next "
+                "visit starts with what is still open. Kept in this browser only.")
+    rows = TR.site_summary(tracker(), study)
+    if not rows:
+        st.info("No visits yet for this study. Read a note that names its site, and it appears here.")
+        return
+    st.dataframe(pd.DataFrame([{"Site": r["site"], "Visits": r["visits"], "Last visit": r["last_visit"],
+                                "Last risk": r["last_risk"].upper(), "Open actions": r["open_actions"]}
+                               for r in rows]), hide_index=True, width="stretch")
+    site = st.selectbox("Site", [r["site"] for r in rows], key="sites_pick")
+    visits = tracker()[study][site]
+    st.subheader(f"Open action items, site {site}")
+    actions = [{**a, "visit_date": v["date"]} for v in visits for a in v["actions"]]
+    if actions:
+        df = pd.DataFrame([{"Done": bool(a.get("done")), "Action": a["action"], "Owner": a["owner"], "Due": a["due"],
+                            "From visit": a["visit_date"], "id": a["id"]} for a in actions])
+        edited = st.data_editor(df, key=f"actions_{site}", hide_index=True, width="stretch",
+                                disabled=["Action", "Owner", "Due", "From visit", "id"],
+                                column_config={"id": None})
+        changed = False
+        for _, r in edited.iterrows():
+            before = next(a for a in actions if a["id"] == r["id"])
+            if bool(r["Done"]) != bool(before.get("done")):
+                TR.set_done(tracker(), study, site, r["id"], bool(r["Done"]))
+                changed = True
+        if changed:
+            st.rerun()
+    else:
+        st.caption("No action items recorded for this site.")
+    st.subheader("Visits")
+    st.dataframe(pd.DataFrame([{"Date": v["date"], "Type": v["visit_type"], "Risk": v["risk"].upper(),
+                                "Active findings": ", ".join(f"{f['display']} ({f['severity']})"
+                                                             for f in v["findings"]) or "none",
+                                "Actions": len(v["actions"])} for v in reversed(visits)]),
+                 hide_index=True, width="stretch")
+    if st.button(f"Forget site {site}'s history in this browser"):
+        tracker()[study].pop(site, None)
+        st.rerun()
+
+
 def browser_sync() -> None:
     """Load saved studies from the browser once, then save them whenever they change."""
     if _browser_js is None:
@@ -518,8 +633,11 @@ def own_model_status() -> None:
 def practice_panel(lib: dict, store) -> None:
     """Rate fictional practice notes: the community's labels, counted once enough people agree."""
     st.subheader("Rate a practice visit")
+    ratings = sum(v["item"].startswith("note:") for v in lib.get("votes", []))
+    raters = len({v["voter"] for v in lib.get("votes", [])})
     st.caption("Fictional notes. Read the note and pick the risk you would give the visit. Ratings are anonymous; a "
-               f"label counts once {L.AGREE_MIN} people agree, then SCOPE learns from it.")
+               f"label counts once {L.AGREE_MIN} people agree, then SCOPE learns from it."
+               + (f" So far: {ratings} ratings from {raters} people." if ratings else " Be one of the first to rate."))
     me = voter_id()
     notes = practice_notes()
     mine = {v["item"] for v in lib.get("votes", []) if v["voter"] == me}
@@ -656,6 +774,10 @@ def learned_tab() -> None:
     else:
         st.caption("No rulings yet. Correct a reading and tick **Share it** to teach SCOPE the first one.")
     own_model_status()
+    st.divider()
+    st.markdown("**Know someone who reviews visit notes?** Every person who rates a few practice visits makes SCOPE "
+                "better for the next one. Share the app:")
+    st.code("https://scope-fabcank6.streamlit.app", language=None)
 
     with st.expander("Curator tools"):
         expected = _setting("SCOPE_CURATOR_KEY")
@@ -1001,6 +1123,7 @@ def load_example_note() -> None:
 with st.sidebar:
     # 1. the study: protocol first, everything else is judged against it
     browser_sync()
+    tracker_load()
     if learning_store() is not None:
         voter_id()  # ask the browser for its anonymous id early, so it is ready when someone rates or reviews
     if "pending_study" in st.session_state:  # a study was just created or saved: select it
@@ -1087,13 +1210,17 @@ with st.sidebar:
                "they are sent to the AI provider you choose.")
     with st.expander("How it works (TL;DR)"):
         st.markdown("An AI model reads the note. SCOPE keeps only findings it can match word for word in the note, "
-                    "scores them with your study's rules, and flags anything it is unsure about for you to check.")
+                    "scores them with your study's rules, and flags anything it is unsure about for you to check. "
+                    "When three people agree on a correction or a rating, SCOPE learns it, for everyone.")
 
 parser = get_parser()
-tab_one, tab_batch, tab_check, tab_prof, tab_learn = st.tabs(
-    ["Analyze a note", "Portfolio view", "Accuracy check", "Study setup", "Help SCOPE learn"])
+tab_one, tab_sites, tab_batch, tab_check, tab_prof, tab_learn = st.tabs(
+    ["Analyze a note", "Sites & actions", "Portfolio view", "Accuracy check", "Study setup", "Help SCOPE learn"])
 
 with tab_one:
+    if not st.session_state.get("note", "").strip():
+        st.info("**New here?** Pick a demo study and one of its notes in the sidebar: two clicks, then SCOPE reads it. "
+                "Have a minute more? Open **Help SCOPE learn** and rate a practice visit; every rating teaches SCOPE.")
     note = st.text_area("Site-visit note", key="note", height=230,
                         placeholder="Paste a monitoring visit report, field note or visit e-mail...")
     rec = None
@@ -1136,9 +1263,10 @@ with tab_one:
         if others:
             st.warning("**Check before relying on this:** " + "; ".join(others) + ".")
 
-        t_find, t_note, t_act, t_letter, t_sim, t_audit, t_json = st.tabs(
-            ["Findings", "Highlighted note", "Visit details & actions", "Follow-up letter", "Similar past visits",
-             "Audit summary", "JSON"])
+        site_history_panel(rec, note)
+        t_find, t_note, t_act, t_report, t_letter, t_sim, t_audit, t_json = st.tabs(
+            ["Findings", "Highlighted note", "Visit details & actions", "Visit report", "Follow-up letter",
+             "Similar past visits", "Audit summary", "JSON"])
         with t_find:
             active = findings_table(rec, "active")
             st.subheader(f"Active findings ({len(active)})")
@@ -1200,6 +1328,26 @@ with tab_one:
                 st.info("No open action items in the note.")
             for w in rec["warnings"]:
                 st.caption(f"Note: {w}")
+        with t_report:
+            st.caption("Turn rough notes into a full visit report: SCOPE writes it from the note and its verified "
+                       "reading only, and leaves anything the note does not say as a [placeholder] for you.")
+            if st.button("Draft visit report"):
+                try:
+                    with st.spinner("Drafting the report..."):
+                        st.session_state["report"] = (note, cached_llm(
+                            "report", note, lambda: RP.draft_report(parser.client, rec, note)))
+                except LLMError as e:
+                    st.error(str(e))
+            report = st.session_state.get("report")
+            if report and report[0] == note:
+                edited_report = st.text_area("Report draft (edit before filing)", report[1], height=520)
+                st.download_button("Download report (.md)", edited_report, "visit_report.md", "text/markdown")
+                missing = RP.missing_sections(edited_report)
+                holes = RP.placeholders(edited_report)
+                if holes:
+                    st.caption("To fill in: " + ", ".join(holes[:12]) + ("…" if len(holes) > 12 else ""))
+                if missing:
+                    st.warning("The draft is missing: " + ", ".join(missing) + ". Add them or draft again.")
         with t_letter:
             if st.button("Draft follow-up letter"):
                 try:
@@ -1381,3 +1529,8 @@ with tab_prof:
 
 with tab_learn:
     learned_tab()
+
+with tab_sites:
+    sites_tab()
+
+tracker_save()  # last, so this run's changes to the site history are written to the browser

@@ -7,7 +7,8 @@ SCOPE reads free-text clinical trial monitoring visit notes (formal visit report
 - **Risk level** (high / medium / low) computed in code by a severity rubric, with the reason ("1 critical finding")
 - **Every finding with its evidence**: what is an active problem, what was fixed during the visit, and what was checked and fine, each with the sentence from the note that shows it
 - **Judged by the study's own protocol**: upload a protocol once and SCOPE drafts the study's rules (SAE definitions, reporting deadlines, visit windows, important deviations), each quoted with its page; deadlines are counted by code, not guessed
-- **Visit details, open action items** with owner and due date, and **a draft follow-up letter** to the investigator
+- **Visit details, open action items** with owner and due date, **a full visit report draft** from rough notes, and **a draft follow-up letter** to the investigator
+- **Site history across visits**: each visit is added to its site, so the next visit opens with what is still open, and a problem that was active last time is pointed out
 - **Learns from the people who use it**: corrections and ratings that three users agree on change how SCOPE reads similar notes, for everyone, without a new release
 - **Any AI model**: the free shared Gemini engine, or your own key for Gemini, OpenAI, Anthropic Claude or any OpenAI-compatible service
 - **Portfolio view** across many visits, and similar past visits
@@ -79,6 +80,14 @@ The Accuracy check runs all 15 demo notes, each under its own protocol. `scripts
 ### Your studies are remembered
 
 Set a study up once. A study profile built from your protocol, edited, or loaded from a file is saved automatically under **My studies** (★) in your browser, together with any corrections you approve. Next week or next quarter, pick it from the study list and score the new visit: no need to upload the protocol again. Nothing is stored on the server; download a copy to back it up or use it on another computer.
+
+### From rough notes to a visit report
+
+The **Visit report** tab turns a rough note (shorthand, bullets, a dictated run-on) into a structured monitoring visit report: visit details, summary, findings requiring action, items resolved during the visit, areas reviewed with no issues, an action-item table and the next visit. It is written only from the note and SCOPE's verified reading (findings with their quotes, actions, visit details); anything the note does not say is left as a `[placeholder]`, and the app lists the placeholders and any missing section. Edit it in place and download it as Markdown (`scope/reports.py`).
+
+### Site history and open actions across visits
+
+Every visit read for a study is added to its site's history: date, visit type, risk, active findings and action items (`scope/tracker.py`). At the next visit to the same site, SCOPE shows **Still open from earlier visits** with a tick box per item, and points out a problem that was also active at the previous visit (the rubric raises repeat findings only when the note says so, so SCOPE leaves that call to the reader). The **Sites & actions** tab lists every site in the study with its visits, last risk and open actions, where items can be ticked done. Like saved studies, the history stays in the user's own browser.
 
 ### SCOPE learns from the people who use it
 
@@ -260,6 +269,8 @@ scope/
   deadlines.py         reporting deadlines counted from the note's dates (calendar, business days, hours)
   learning.py          shared learning: shared cases, curator review, rulings used on similar notes
   ownmodel.py          SCOPE's own model: retrains on approved cases, switches itself on at a measured bar
+  reports.py           visit report draft from rough notes and the verified reading
+  tracker.py           site history and open action items across visits
   demos.py             the five fictional demo studies (profiles/demos/)
   providers.py         LLM providers: Gemini, OpenAI, Anthropic Claude, OpenAI-compatible (bring your own key)
   schema.py            issue types, severity points, risk thresholds
